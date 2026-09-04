@@ -13,6 +13,12 @@ export type Row = Record<string, unknown>
 let dbPromise: Promise<{ db: duckdb.AsyncDuckDB; con: duckdb.AsyncDuckDBConnection }> | null = null
 
 async function boot() {
+  // the search index is one plain fetch started now, alongside the wasm download, and handed
+  // to DuckDB as an in-memory file: one request instead of nine range reads after boot
+  const indexBytes = fetch(`${DATA_BASE}/search_index.parquet`).then(r => {
+    if (!r.ok) throw new Error(`search_index.parquet: ${r.status}`)
+    return r.arrayBuffer()
+  })
   // wasm and worker from jsDelivr (the 36 MB module is over the Workers asset limit). The
   // worker script is cross-origin, so it is loaded through a same-origin blob shim.
   const bundle = await duckdb.selectBundle(duckdb.getJsDelivrBundles())
@@ -28,10 +34,12 @@ async function boot() {
   // every table file is registered under its relative path: DuckDB then opens it by name and
   // skips the HEAD it would otherwise send to resolve a raw URL on every query
   for (const f of TABLE_FILES) await db.registerFileURL(f, `${DATA_BASE}/${f}`, duckdb.DuckDBDataProtocol.HTTP, false)
+  await db.registerFileBuffer('search_index.parquet', new Uint8Array(await indexBytes))
   const con = await db.connect()
   // footers are fetched once per file per session
   await con.query(`SET parquet_metadata_cache = true`).catch(() => {})
   await con.query(`CREATE TABLE search_index AS SELECT * FROM read_parquet('search_index.parquet')`)
+  await db.dropFile('search_index.parquet').catch(() => {})   // the table holds it now
   // the per-gene tables are partitioned by chromosome and TSS bin; the index knows every bin
   const bins = (await con.query(`SELECT DISTINCT chr, bin FROM search_index WHERE bin IS NOT NULL`)).toArray()
   for (const r of bins) {
@@ -49,7 +57,7 @@ async function boot() {
 const CHROMS = [...Array.from({ length: 22 }, (_, i) => `chr${i + 1}`), 'chrX']
 const BINNED_TABLES = ['gene_detail', 'cis_eqtl_nominal', 'cis_sqtl_nominal']
 const TABLE_FILES: string[] = [
-  'search_index.parquet', 'genes.parquet', 'splice_phenotypes.parquet', 'credible_sets.parquet', 'coloc.parquet',
+  'genes.parquet', 'splice_phenotypes.parquet', 'credible_sets.parquet', 'coloc.parquet',
   'gwas_dcm_bins.parquet', 'gene_annotation.parquet', 'exons.parquet', 'variants_by_rsid.parquet',
   ...['gwas_dcm', 'variants_by_position', 'trans_pairs', 'trans_by_variant']
     .flatMap(t => CHROMS.map(c => `${t}/chr=${c}/data.parquet`)),

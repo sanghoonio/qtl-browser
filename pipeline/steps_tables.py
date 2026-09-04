@@ -190,6 +190,18 @@ def coloc_stub(cfg: Config) -> None:
     ])
     write_parquet(schema.empty_table(), cfg.derived / "coloc.parquet", 1000)
     log("coloc: empty stub written (awaiting authors' tables)")
+    # the landing track's loci as a tiny JSON, fetched with one plain request before the query
+    # engine exists: gene, symbol, chromosome, TSS, and which analyses colocalized
+    import json
+    e, s = set(cfg["coloc_genes"]["eqtl"]), set(cfg["coloc_genes"]["sqtl"])
+    con = connect(cfg)
+    rows = con.execute(f"""SELECT gene_id, symbol, chr, tss FROM '{cfg.derived / 'genes.parquet'}'
+        WHERE symbol IN ({', '.join(repr(x) for x in sorted(e | s))}) ORDER BY chr, tss""").fetchall()
+    loci = [{"gene_id": g, "symbol": sym, "chr": c, "tss": t,
+             "trait": "both" if sym in e and sym in s else "sQTL" if sym in s else "eQTL"} for g, sym, c, t in rows]
+    (cfg.derived / "coloc_loci.json").write_text(json.dumps(loci, indent=1))
+    missing = (e | s) - {r[1] for r in rows}
+    log(f"coloc_loci.json: {len(loci)} loci" + (f"; not in genes: {sorted(missing)}" if missing else ""))
 
 
 def gene_detail(cfg: Config) -> None:

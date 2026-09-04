@@ -192,13 +192,6 @@ export const geneRowsFor = (hits: SearchHit[]) =>
   hits.length === 0 ? Promise.resolve([] as Gene[]) : rows<Gene>(`SELECT * FROM ${parquet('genes.parquet')} WHERE ${
     hits.map(h => `(chr = ${lit(h.chr)} AND tss = ${h.tss} AND gene_id = ${lit(h.gene_id)})`).join(' OR ')}`)
 
-export interface GwasBin extends Row {
-  chr: string; bin_start: number; bin_end: number; min_p: number; lead_position: number; lead_rsid: string | null
-  lead_beta: number; lead_ea: string; n_gws: number; n_variants: number
-}
-/** DCM GWAS strongest signal per fixed window (tiny table, read whole). */
-export const gwasBins = () => rows<GwasBin>(`SELECT * FROM ${parquet('gwas_dcm_bins.parquet')} ORDER BY chr, bin_start`)
-
 // ---- gene track under the locus plot --------------------------------------------------------
 
 export interface WindowGene extends Row { gene_id: string; symbol: string | null; start: number; end: number; strand: string; tss: number; biotype: string }

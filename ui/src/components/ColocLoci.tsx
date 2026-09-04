@@ -4,9 +4,19 @@ import { GenomeTrack } from '@/components/genome-track/genome-track'
 import type { TrackBin, TrackLocus } from '@/components/genome-track/types'
 import { SectionPanel } from '@/components/section-panel'
 import { fetchChromSizes, type ChromSizes } from '@/lib/chrom-sizes'
-import { COLOC_EQTL_GENES, COLOC_SQTL_GENES } from '@/lib/coloc'
 import { fmtInt, fmtP } from '@/lib/format'
-import { gwasBins, searchBySymbols, type GwasBin, type SearchHit } from '@/lib/queries'
+import { DATA_BASE } from '@/lib/db'
+
+/** The pipeline's coloc_loci.json and gwas_dcm_bins.json: plain fetches, no query engine. */
+interface ColocLocus { gene_id: string; symbol: string; chr: string; tss: number; trait: 'eQTL' | 'sQTL' | 'both' }
+interface GwasBin {
+  chr: string; bin_start: number; bin_end: number; min_p: number; lead_position: number; lead_rsid: string | null
+  lead_beta: number; lead_ea: string; n_gws: number; n_variants: number
+}
+const getJSON = <T,>(name: string) => fetch(`${DATA_BASE}/${name}`).then(r => { if (!r.ok) throw new Error(`${name}: ${r.status}`); return r.json() as Promise<T> })
+/** gwas_dcm_bins.json is columnar (keys once, one array per column); turn it back into rows */
+const fromColumns = <T,>(d: { n: number; columns: Record<string, unknown[]> }): T[] =>
+  Array.from({ length: d.n }, (_, i) => Object.fromEntries(Object.entries(d.columns).map(([k, v]) => [k, v[i]])) as T)
 
 const BIN_CAP = 20   // -log10 p; BAG3 and a couple of others exceed it and are drawn clipped
 
@@ -24,7 +34,7 @@ const TRAIT_COLORS: Record<string, string> = {
 export default function ColocLoci() {
   const [chrom, setChrom] = useState<ChromSizes | null>(null)
   const [chromError, setChromError] = useState<string | null>(null)
-  const [hits, setHits] = useState<SearchHit[] | null>(null)
+  const [hits, setHits] = useState<ColocLocus[] | null>(null)
   const [gwas, setGwas] = useState<GwasBin[] | null>(null)
   const [hovered, setHovered] = useState<string | null>(null)
   const [skipped, setSkipped] = useState(0)
@@ -36,8 +46,8 @@ export default function ColocLoci() {
       .then(c => { const keep = c.names.map((n, i) => [n, c.lengths[i]!] as const).filter(([n]) => n !== 'chrX' && n !== 'chrY')
         setChrom({ names: keep.map(k => k[0]), lengths: keep.map(k => k[1]) }) })
       .catch((e: Error) => setChromError(e.message))
-    searchBySymbols([...new Set([...COLOC_EQTL_GENES, ...COLOC_SQTL_GENES])]).then(setHits)
-    gwasBins().then(setGwas).catch(() => setGwas([]))
+    getJSON<ColocLocus[]>('coloc_loci.json').then(setHits).catch(() => setHits([]))
+    getJSON<{ n: number; columns: Record<string, unknown[]> }>('gwas_dcm_bins.json').then(d => setGwas(fromColumns<GwasBin>(d))).catch(() => setGwas([]))
   }, [])
 
   const bins: TrackBin[] = useMemo(() => (gwas ?? []).map(b => ({
@@ -46,14 +56,8 @@ export default function ColocLoci() {
       (b.n_gws > 0 ? ` · ${fmtInt(b.n_gws)} genome-wide significant variants` : '') + ` · ${fmtInt(b.n_variants)} tested`,
   })), [gwas])
 
-  const loci: TrackLocus[] = useMemo(() => {
-    const e = new Set(COLOC_EQTL_GENES), s = new Set(COLOC_SQTL_GENES)
-    return (hits ?? []).map(h => {
-      const sym = h.symbol ?? h.gene_id
-      const trait = e.has(sym) && s.has(sym) ? 'both' : s.has(sym) ? 'sQTL' : 'eQTL'
-      return { id: h.gene_id, chr: h.chr, start: h.tss, end: h.tss, label: sym, trait }
-    })
-  }, [hits])
+  const loci: TrackLocus[] = useMemo(() =>
+    (hits ?? []).map(h => ({ id: h.gene_id, chr: h.chr, start: h.tss, end: h.tss, label: h.symbol ?? h.gene_id, trait: h.trait })), [hits])
 
   const legend = (
     <span className="flex flex-wrap items-center justify-end gap-x-4 gap-y-1 text-xs text-base-content/60">

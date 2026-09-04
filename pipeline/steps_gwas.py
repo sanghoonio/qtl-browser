@@ -63,5 +63,13 @@ def run(cfg: Config) -> None:
     """).fetch_arrow_table()
     out = cfg.derived / "gwas_dcm_bins.parquet"
     write_parquet(t, out, 10_000)
+    # the same 569 rows as JSON: the landing track fetches this with one plain request instead
+    # of six DuckDB range requests, and before the engine has booted. Columnar (one array per
+    # column) because r2.dev serves JSON uncompressed and row objects repeat every key 569 times.
+    import json
+    cols = {name: t.column(name).to_pylist() for name in t.column_names}
+    cols["min_p"] = [float(f"{p:.3g}") for p in cols["min_p"]]
+    cols["lead_beta"] = [round(b, 3) for b in cols["lead_beta"]]
+    (cfg.derived / "gwas_dcm_bins.json").write_text(json.dumps({"n": t.num_rows, "columns": cols}, separators=(",", ":")))
     n_gws = sum(1 for x in t.column("n_gws").to_pylist() if x > 0)
     log(f"gwas_bins: {t.num_rows} windows of {bin_bp // 1_000_000} Mb, {n_gws} with genome-wide significant variants -> {out.name}")

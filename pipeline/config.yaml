@@ -50,6 +50,14 @@ r2:
     - "*.log"
     - "*.tmp.parquet"
 
+# genes the preprint reports as colocalized with the DCM GWAS (coloc PP.H4 > 0.8), from the
+# authors; the landing track draws them from coloc_loci.json. The same list is in ui/src/lib/coloc.ts
+# for the gene-page chips until the authors' coloc table replaces both.
+coloc_genes:
+  eqtl: [VPREB3, SYNPO2L, SQLE, SMARCB1, SKI, PROM1, PRKCA, PJVK, MYOZ1, MTSS1, MMP11, MAP3K7CL,
+         LMF1, LINC00964, FLNC, CRIM1-DT, CRIM1, CDKN1A, CAMK2D, ADAMTS7P3, ACTN2]
+  sqtl: [SYNPO2L, CAMK2D, TKT, LMF1]
+
 # counts reported in the preprint, used by the validate step (tolerance is fractional)
 paper_counts:
   egenes: 10241

@@ -29,8 +29,8 @@ live in `config.yaml`. Nothing is hard-coded in the steps.
 | nominal | `steps_nominal` | cis nominal files, one process per chromosome | `cis_eqtl_nominal/chr=*/bin=*/`, `cis_sqtl_nominal/chr=*/bin=*/`: one file per `nominal_bin_genes` tested genes (by TSS rank, the `bin` column of `genes`), one row group per gene, delta/byte-stream-split encodings, rsIDs as `rs_number`. With `sqtl_nominal: significant` the sQTL side keeps only introns flagged `is_sqtl` |
 | gene_detail | `steps_tables` | genes, exons, splice_phenotypes | `gene_detail/chr=*/bin=*/`: one row per tested gene with the genes row, the collapsed exon model (`exons` list) and every tested intron (`splice` list); one row group per gene |
 | trans | `steps_tables` | trans files | `trans_pairs/chr=<gene chr>/` sorted by gene, and `trans_by_variant/chr=<variant chr>/` sorted by position |
-| coloc_stub | `steps_tables` | nothing yet | empty `coloc.parquet` with the intended schema |
-| gwas_bins | `steps_gwas` | the Jurgens 2024 file named by `dcm_gwas` in the config (biobanks-only; the CVDKP zip has five) | `gwas_dcm_bins.parquet`: strongest p per 5 Mb window |
+| coloc_stub | `steps_tables` | `coloc_genes` in the config, genes | empty `coloc.parquet` with the intended schema; `coloc_loci.json`, the landing track's 25 loci (one plain fetch, no engine) |
+| gwas_bins | `steps_gwas` | the Jurgens 2024 file named by `dcm_gwas` in the config (biobanks-only; the CVDKP zip has five) | `gwas_dcm_bins.parquet` and the same rows as `gwas_dcm_bins.json`: strongest p per 5 Mb window |
 | gwas_full | `steps_gwas` | same | `gwas_dcm/chr=*/` position-sorted in 10k-row groups (about 3 Mb each), for LocusCompare; `gwas_dcm.json` with the file name, cases, controls, and variant count for the manifest |
 | manifest | `steps_finish` | everything above | `manifest.json`: tables, rows, sizes, columns, counts, source versions |
 

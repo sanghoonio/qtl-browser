@@ -59,6 +59,8 @@ def manifest(cfg: Config) -> None:
         "counts": counts,
         "sources": {s["name"]: {"version": s.get("version"), "description": s.get("description")} for s in sources["sources"]},
         "tables": tables,
+        # small JSON files the app fetches directly, without the query engine
+        "assets": {n: {"path": n, "bytes": (cfg.derived / n).stat().st_size} for n in ("coloc_loci.json", "gwas_dcm_bins.json") if (cfg.derived / n).exists()},
         "gwas_dcm": json.loads((cfg.derived / "gwas_dcm.json").read_text()) if (cfg.derived / "gwas_dcm.json").exists() else None,
     }
     (cfg.derived / "manifest.json").write_text(json.dumps(out, indent=2))
