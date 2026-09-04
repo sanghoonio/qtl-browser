@@ -1,0 +1,60 @@
+# pipeline
+
+Turns `data/raw/` into the parquet tables the browser reads, under `data/derived/`, and writes
+`manifest.json` describing them. Idempotent: each step leaves a marker in `data/derived/.done/`
+and is skipped on the next run unless `--force` is given.
+
+```bash
+uv run python -m pipeline steps                       # list steps in order
+uv run python -m pipeline build                       # run what is not done yet
+uv run python -m pipeline build --step nominal --force
+uv run python -m pipeline validate
+uv run python -m pipeline.figures manhattan | density 5 10 | gwas 5 | themes
+uv run python -m pipeline.upload cors | sync [--dryrun] [--delete] | check   # R2, see config `r2:`
+```
+
+Paths, the significance rule, window sizes, worker counts, and the paper's reference counts
+live in `config.yaml`. Nothing is hard-coded in the steps.
+
+## Steps
+
+| Step | Module | Reads | Writes |
+|---|---|---|---|
+| extract | `steps_extract` | Zenodo `*.tar.gz` | per-chromosome parquet unpacked next to the archives |
+| gtf | `steps_gtf` | GENCODE v34 GTF | `gene_annotation.parquet`, `exons.parquet` (sorted by gene, small row groups) |
+| variants_collect | `steps_variants` | every cis file | `_tmp/variants_raw.parquet`: distinct (chr, position, A1, A2), 8.87M |
+| variants_rsid | `steps_variants` | dbSNP b157 VCF via `bcftools query -T` on those positions | `variants_by_position/chr=*/`, `variants_by_rsid.parquet`, with an exact / position / none match flag |
+| permutation_tables | `steps_tables` | cis permutation files, SuSiE, trans, annotation | `genes.parquet`, `splice_phenotypes.parquet` (sorted chr, tss; stats for range reads), `search_index.parquet` (the one table the browser loads whole) |
+| credible_sets | `steps_tables` | SuSiE files | `credible_sets.parquet` |
+| nominal | `steps_nominal` | cis nominal files, one process per chromosome | `cis_eqtl_nominal/chr=*/`, `cis_sqtl_nominal/chr=*/`: one row group per gene, delta/byte-stream-split encodings, rsIDs as `rs_number`. With `sqtl_nominal: significant` the sQTL side keeps only introns flagged `is_sqtl` |
+| trans | `steps_tables` | trans files | `trans_pairs/chr=<gene chr>/` sorted by gene, and `trans_by_variant/chr=<variant chr>/` sorted by position |
+| coloc_stub | `steps_tables` | nothing yet | empty `coloc.parquet` with the intended schema |
+| gwas_bins | `steps_gwas` | Jurgens 2024 DCM meta-analysis TSV | `gwas_dcm_bins.parquet`: strongest p per 5 Mb window |
+| gwas_full | `steps_gwas` | same | `gwas_dcm/chr=*/` position-sorted in 10k-row groups (about 3 Mb each), for LocusCompare |
+| manifest | `steps_finish` | everything above | `manifest.json`: tables, rows, sizes, columns, counts, source versions |
+
+Underscore directories in `data/derived/` (`_tmp`, `_full`) are scratch and never uploaded;
+`_full/cis_sqtl_nominal` is the all-introns build parked for local use.
+
+`validate` checks row counts against the raw files, eGene and sQTL counts against the preprint,
+that six paper-named variants resolve to their rsIDs, that a FLNC query touches one row group,
+and the rsID exact-match rate.
+
+## Layout rules the browser depends on
+
+- Big tables are hive-partitioned by chromosome; the app always names the exact partition file,
+  since there is no directory listing over HTTP.
+- Row-group statistics are written only for the columns queries filter on. A per-gene read
+  needs `gene_id` (nominal, trans, exons) or `chr` + `tss` (genes, splice phenotypes, credible
+  sets: the app knows both from the search index). Position lookups need `position`.
+- Sort order decides what a row group's statistics cover. Sorting by TSS instead of gene id made
+  a gene's trans read the whole chromosome; sorting exons in GTF order made one gene touch
+  sixteen row groups. Both were fixed by sorting on the filtered column.
+- Concurrent DuckDB workers must not share a `temp_directory`; `connect()` takes one per worker.
+
+## Conventions
+
+- `gene_id` is an unversioned ENSG; `symbol` is the GENCODE name; `chr` is `chr1`..`chrX`.
+- `A1` is the effect (minor) allele, `A2` the reference, as in the Zenodo release.
+- sQTL `phenotype_id` is the leafcutter string `chr:start:end:clu_N_strand:ENSG.v`.
+- `pval_perm < 0.05` is the significance flag; a BH `qval` on `pval_beta` is stored alongside.

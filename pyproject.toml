@@ -1,0 +1,15 @@
+[project]
+name = "qtl-browser-pipeline"
+version = "0.1.0"
+description = "Build step: TOPCHeF raw summary statistics -> browser-ready parquet"
+requires-python = ">=3.11"
+dependencies = [
+    "duckdb>=1.1",
+    "matplotlib>=3.11.1",
+    "pandas>=3.0.5",
+    "pyarrow>=17",
+    "pyyaml>=6",
+]
+
+[tool.uv]
+package = false

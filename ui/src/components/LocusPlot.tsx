@@ -1,0 +1,247 @@
+import { useEffect, useRef, useState, type ReactNode } from 'react'
+import * as vg from '@uwdata/vgplot'
+import { Selection } from '@uwdata/mosaic-core'
+import { dropTable, getCoordinator, getDB, lit, materializeLocus, parquet } from '@/lib/db'
+import { CS_COLORS, CS_DOMAIN, CS_SWATCH_CLIP, CS_SYMBOLS, isDark } from '@/lib/plot-theme'
+import type { SearchHit } from '@/lib/queries'
+import { Bar } from '@/components/states'
+import GeneTrack from '@/components/GeneTrack'
+import LocusCompare from '@/components/LocusCompare'
+import { clearPlotHover, onPlotPointerMove } from '@/lib/plot-hover'
+import ExportMenu from '@/components/ExportMenu'
+
+export interface LocusSpec {
+  hit: SearchHit
+  qtlType: 'e' | 's'
+  phenotypeId?: string
+  tss: number
+  intron?: { start: number; end: number }
+}
+const MARGIN_LEFT = 48
+const SCATTER_H = 290    // height of the locus scatter; the LocusCompare square matches it
+export const PLOT_MARGIN_TOP = 20
+export const PLOT_MARGIN_BOTTOM = 36
+
+/**
+ * Linked hover for the locus scatter and the LocusCompare panel. A `nearest` interactor on
+ * each plot publishes the hovered variant's position into one shared selection; both plots
+ * draw a ring and a label for whatever the selection holds, so hovering a point in either
+ * panel highlights and labels the same variant in both. Replaces Plot's built-in tip.
+ */
+export function linkedHoverMarks(table: string, link: Selection, x: string, y: string, ink: string, surface: string) {
+  return [
+    vg.nearest({ as: link, channels: ['position'], fields: ['position'], maxRadius: 24 }),
+    vg.dot(vg.from(table, { filterBy: link }), { x, y, r: 5.5, fill: 'none', stroke: ink, strokeWidth: 3, pointerEvents: 'none' }),
+    vg.text(vg.from(table, { filterBy: link }), { x, y, text: 'label', dy: -12, textAnchor: 'middle', lineAnchor: 'bottom',
+      fontSize: 10, fill: ink, stroke: surface, strokeWidth: 5, strokeLinejoin: 'round', pointerEvents: 'none' }),
+  ]
+}
+export const SURFACE = { light: '#ffffff', dark: '#1b1a1a' }
+
+/** One cis window as a table for the plots: -log10 p, credible-set class, a tooltip label, and
+ *  the DCM GWAS statistics for variants present there (matched on position and alleles in
+ *  either orientation, GWAS beta re-signed to the QTL effect allele A1). Ordered so
+ *  credible-set variants are drawn last (on top). */
+function locusSQL(spec: LocusSpec): string {
+  const file = spec.qtlType === 'e' ? 'cis_eqtl_nominal' : 'cis_sqtl_nominal'
+  const where = [`q.gene_id = ${lit(spec.hit.gene_id)}`, spec.phenotypeId ? `q.phenotype_id = ${lit(spec.phenotypeId)}` : null]
+    .filter(Boolean).join(' AND ')
+  const lo = spec.tss - 1_000_000, hi = spec.tss + 1_000_000
+  return `
+    SELECT q.position,
+           -- p underflows to 0 for a few extreme variants: place them just above the largest finite value
+           coalesce(-log10(nullif(q.pval_nominal, 0)), max(-log10(nullif(q.pval_nominal, 0))) OVER () * 1.05) AS nlp,
+           q.pval_nominal = 0 AS clipped,
+           q.pval_nominal, q.slope, q.slope_se, q.af, q.pip, q.cs_id, q.rs_number,
+           coalesce(q.cs_id::VARCHAR, 'none') AS cs,
+           g.p AS gwas_p, -log10(g.p) AS gwas_nlp,
+           CASE WHEN g.ea = q.A1 THEN g.beta ELSE -g.beta END AS gwas_beta,
+           coalesce('rs' || q.rs_number, q.position::VARCHAR) || '  ' || q.A1 || '/' || q.A2
+             || chr(10) || CASE WHEN q.pval_nominal = 0 THEN 'p = 0 (underflow; drawn above the maximum)' ELSE 'p = ' || format('{:.2e}', q.pval_nominal) END
+             || chr(10) || 'slope ' || format('{:.3f}', q.slope) || ' ± ' || format('{:.3f}', q.slope_se)
+             || chr(10) || 'AF ' || format('{:.3f}', q.af)
+             || CASE WHEN q.pip IS NULL THEN '' ELSE chr(10) || 'PIP ' || format('{:.3f}', q.pip) || ' (set ' || q.cs_id || ')' END
+             || CASE WHEN g.p IS NULL THEN '' ELSE chr(10) || 'DCM GWAS p = ' || format('{:.2e}', g.p) || ', beta ' || format('{:+.3f}', CASE WHEN g.ea = q.A1 THEN g.beta ELSE -g.beta END) || ' per A1' END AS label
+    FROM ${parquet(`${file}/chr=${spec.hit.chr}/data.parquet`)} q
+    LEFT JOIN (SELECT * FROM ${parquet(`gwas_dcm/chr=${spec.hit.chr}/data.parquet`)} WHERE position BETWEEN ${lo} AND ${hi}) g
+      ON g.position = q.position AND ((g.ea = q.A1 AND g.nea = q.A2) OR (g.ea = q.A2 AND g.nea = q.A1))
+    WHERE ${where}
+    -- the GWAS lists some indels in both allele orientations as separate records: keep one per
+    -- QTL variant, preferring the orientation that matches the QTL alleles as written
+    QUALIFY row_number() OVER (PARTITION BY q.position, q.A1, q.A2 ORDER BY (g.ea = q.A1) DESC NULLS LAST, g.p) = 1
+    ORDER BY q.cs_id IS NOT NULL, q.position`
+}
+
+/** -log10 p against position for one cis window. Dots colored by credible-set membership,
+ *  PIP as opacity, a TSS rule, and Observable Plot's nearest-point tip. */
+export default function LocusPlot({ spec, onCount, onLegend, onExportMenu }: {
+  spec: LocusSpec
+  onCount?: (n: number) => void
+  onLegend?: (sets: string[] | null) => void
+  /** Receives the export menu once the plots are drawn (null while loading) so the parent can place it. */
+  onExportMenu?: (menu: ReactNode | null) => void
+}) {
+  const host = useRef<HTMLDivElement>(null)
+  const [state, setState] = useState<'loading' | 'ready' | 'error'>('loading')
+  const [width, setWidth] = useState(0)
+  const [tableName, setTableName] = useState<string | null>(null)
+  const [link, setLink] = useState<Selection | null>(null)
+  const [yMax, setYMax] = useState(1)
+  const [dark, setDark] = useState(isDark)
+
+  // colors are baked into the SVG, so redraw when the theme flips
+  useEffect(() => {
+    const obs = new MutationObserver(() => setDark(isDark()))
+    obs.observe(document.documentElement, { attributes: true, attributeFilter: ['data-theme'] })
+    return () => obs.disconnect()
+  }, [])
+
+  // The left column's width drives the scatter width; both plots redraw on resize without
+  // re-materializing the locus table (data and drawing are separate effects).
+  const column = useRef<HTMLDivElement>(null)
+  useEffect(() => {
+    const el = column.current
+    if (!el) return
+    let t: number | null = null
+    const obs = new ResizeObserver(entries => {
+      const w = entries[0]?.contentRect.width
+      if (!w) return
+      if (t !== null) window.clearTimeout(t)
+      t = window.setTimeout(() => setWidth(Math.max(320, Math.round(w))), 80)
+    })
+    obs.observe(el)
+    return () => { obs.disconnect(); if (t !== null) window.clearTimeout(t) }
+  }, [])
+
+  // 1. data: materialize the window once per locus
+  const key = `${spec.hit.gene_id}|${spec.qtlType}|${spec.phenotypeId ?? ''}`
+  useEffect(() => {
+    let alive = true
+    let table: string | null = null
+    setState('loading')
+    setTableName(null)
+    setLink(null)
+    onLegend?.(null)
+    ;(async () => {
+      try {
+        await getCoordinator()
+        table = await materializeLocus(locusSQL(spec))
+        if (!alive) return
+        const { con } = await getDB()
+        const agg = (await con.query(`SELECT count(*) AS n, max(nlp) AS ymax FROM ${table}`)).toArray()[0]
+        const sets = (await con.query(`SELECT DISTINCT cs FROM ${table} WHERE cs <> 'none' ORDER BY cs`)).toArray().map(r => String(r.cs))
+        if (!alive) return
+        onCount?.(Number(agg.n))
+        onLegend?.(sets)
+        // one explicit y domain shared with the LocusCompare panel so the two y axes coincide
+        setYMax(Math.max(1, Number(agg.ymax)) * 1.04)
+        // empty: true → no hovered variant means the highlight layers draw nothing (an empty
+        // selection otherwise means "no filter", which rings every point)
+        setLink(Selection.single({ empty: true }))
+        setTableName(table)
+      } catch (e) {
+        console.error(e)
+        if (alive) setState('error')
+      }
+    })()
+    return () => {
+      alive = false
+      if (table) dropTable(table)
+    }
+  }, [key]) // eslint-disable-line react-hooks/exhaustive-deps
+
+  // 2. drawing: redraw whenever the table, the width, or the theme changes
+  useEffect(() => {
+    const el = host.current
+    if (!el || !tableName || !link || width === 0) return
+    const colors = dark ? CS_COLORS.dark : CS_COLORS.light
+    const ink = dark ? '#c3c2b7' : '#52514e'
+    try {
+      const plot = vg.plot(
+        // drawn first so it sits under the dots and the hover label
+        vg.ruleX([spec.tss], { stroke: ink, strokeOpacity: 0.6, strokeDasharray: '2,3' }),
+        vg.dot(vg.from(tableName), {
+          x: 'position', y: 'nlp', fill: 'cs', symbol: 'cs', r: 3.5,
+          fillOpacity: vg.sql`CASE WHEN cs = 'none' THEN 0.35 ELSE 0.45 + 0.4 * pip END`,
+          channels: { position: 'position' },
+        }),
+        // the nearest interactor binds to the mark added just before it: keep it right after the data dots
+        ...linkedHoverMarks(tableName, link, 'position', 'nlp', ink, dark ? SURFACE.dark : SURFACE.light),
+        vg.xDomain([spec.tss - 1_000_000, spec.tss + 1_000_000]), vg.yLabel('−log₁₀ p'),
+        vg.xLabel(`${spec.hit.chr} position (Mb)`), vg.xTickFormat((d: number) => (d / 1e6).toFixed(2)),
+        vg.colorDomain([...CS_DOMAIN]), vg.colorRange(colors),
+        vg.symbolDomain([...CS_DOMAIN]), vg.symbolRange(CS_SYMBOLS),
+        vg.xInset(8), vg.yDomain([0, yMax]), vg.yGrid(true),
+        vg.width(width), vg.height(SCATTER_H), vg.marginLeft(MARGIN_LEFT), vg.marginRight(20), vg.marginTop(PLOT_MARGIN_TOP), vg.marginBottom(PLOT_MARGIN_BOTTOM),
+        vg.style({ fontFamily: 'inherit', fontSize: '11px', color: ink, background: 'transparent' }),
+      ) as HTMLElement
+      el.replaceChildren(plot)
+      setState('ready')
+    } catch (e) {
+      console.error(e)
+      setState('error')
+    }
+    return () => { el.replaceChildren() }
+  }, [tableName, link, width, dark, yMax, spec.tss, spec.hit.chr])
+
+  const compareCol = useRef<HTMLDivElement>(null)
+  const stem = `${spec.hit.symbol ?? spec.hit.gene_id}${spec.phenotypeId ? '_' + spec.phenotypeId.split(':').slice(0, 3).join('_') : ''}`
+  useEffect(() => {
+    onExportMenu?.(state === 'ready' ? (
+      <ExportMenu background={dark ? SURFACE.dark : SURFACE.light} targets={[
+        { label: 'Locus plot with gene track', name: `${stem}_locus`, el: () => column.current },
+        { label: 'QTL versus GWAS', name: `${stem}_locuscompare`, el: () => compareCol.current },
+      ]} />
+    ) : null)
+  }, [state, dark, stem]) // eslint-disable-line react-hooks/exhaustive-deps
+
+  return (
+    <div className="flex flex-col gap-6 md:flex-row md:gap-2">
+      <div ref={column} className="relative min-h-[340px] min-w-0 flex-1">
+        {state === 'loading' && <Bar className="h-[290px] w-full rounded-lg" />}
+        {state === 'error' && <div className="p-4 text-sm text-error">Could not draw the locus.</div>}
+        <div ref={host} className={`plot-host ${state === 'ready' ? '' : 'invisible'}`}
+          onPointerMove={onPlotPointerMove} onPointerLeave={clearPlotHover} />
+        {state === 'ready' && width > 0 && (
+          <GeneTrack spec={{ chr: spec.hit.chr, geneId: spec.hit.gene_id, domain: [spec.tss - 1_000_000, spec.tss + 1_000_000], intron: spec.intron }}
+            width={width} marginLeft={MARGIN_LEFT} dark={dark} />
+        )}
+      </div>
+      {/* the right column is reserved from the start so the scatter measures its final width;
+          the panel is a square the height of the scatter so the two plots share a top and bottom */}
+      <div ref={compareCol} className="shrink-0" style={{ width: SCATTER_H }}>
+        {state === 'ready' && tableName && link
+          ? <LocusCompare table={tableName} dark={dark} size={Math.min(SCATTER_H, Math.max(width, 200))} yDomain={[0, yMax]} link={link} />
+          : <Bar className="aspect-square w-full rounded-lg" />}
+      </div>
+    </div>
+  )
+}
+
+/** Legend for the credible-set encoding; rendered by the parent so it can sit in the section header. */
+export function LocusLegend({ sets }: { sets: string[] }) {
+  const [dark, setDark] = useState(isDark)
+  useEffect(() => {
+    const obs = new MutationObserver(() => setDark(isDark()))
+    obs.observe(document.documentElement, { attributes: true, attributeFilter: ['data-theme'] })
+    return () => obs.disconnect()
+  }, [])
+  const colors = dark ? CS_COLORS.dark : CS_COLORS.light
+  return (
+    <div className="flex flex-wrap items-center justify-end gap-x-4 gap-y-1 text-xs text-base-content/60">
+      {['none', ...sets].map(d => {
+        const i = CS_DOMAIN.indexOf(d as (typeof CS_DOMAIN)[number])
+        const shape = CS_SYMBOLS[i]
+        return (
+          <span key={d} className="inline-flex items-center gap-1.5">
+            {/* inline style: swatch color and shape are data values from the chart palette, not theme tokens */}
+            <span className={`inline-block size-2.5 ${shape === 'circle' ? 'rounded-full' : ''}`}
+              style={{ backgroundColor: colors[i], clipPath: CS_SWATCH_CLIP[shape] }} />
+            {d === 'none' ? 'not in a credible set' : `credible set ${d}`}
+          </span>
+        )
+      })}
+      <span className="inline-flex items-center gap-1.5"><span className="inline-block h-3 border-l border-dashed border-base-content/60" /> TSS</span>
+    </div>
+  )
+}

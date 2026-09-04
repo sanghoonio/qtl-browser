@@ -1,0 +1,16 @@
+# raw and derived data never go in git; keep the download config and script
+data/**
+!data/raw/
+!data/raw/sources.yaml
+!data/raw/download.py
+
+# secrets (R2 token for pipeline/upload.py)
+.env
+
+# python env
+.venv/
+__pycache__/
+
+# ui app
+ui/node_modules/
+ui/dist/

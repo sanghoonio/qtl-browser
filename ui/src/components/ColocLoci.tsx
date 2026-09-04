@@ -1,0 +1,96 @@
+import { useEffect, useMemo, useState } from 'react'
+import { useNavigate } from 'react-router'
+import { GenomeTrack } from '@/components/genome-track/genome-track'
+import type { TrackBin, TrackLocus } from '@/components/genome-track/types'
+import { SectionPanel } from '@/components/section-panel'
+import { Bar } from '@/components/states'
+import { fetchChromSizes, type ChromSizes } from '@/lib/chrom-sizes'
+import { COLOC_EQTL_GENES, COLOC_SQTL_GENES } from '@/lib/coloc'
+import { fmtInt, fmtP } from '@/lib/format'
+import { gwasBins, searchBySymbols, type GwasBin, type SearchHit } from '@/lib/queries'
+
+const BIN_CAP = 20   // -log10 p; BAG3 and a couple of others exceed it and are drawn clipped
+
+/** Series colors are theme tokens so a palette change flows through. */
+const TRAIT_COLORS: Record<string, string> = {
+  eQTL: 'var(--color-primary)',
+  sQTL: 'var(--color-secondary)',
+  both: 'var(--color-accent)',
+}
+
+/**
+ * The paper's DCM-colocalized loci on a static whole-genome track. Every marker is labeled;
+ * clicking one opens the gene page.
+ */
+export default function ColocLoci() {
+  const [chrom, setChrom] = useState<ChromSizes | null>(null)
+  const [chromError, setChromError] = useState<string | null>(null)
+  const [hits, setHits] = useState<SearchHit[] | null>(null)
+  const [gwas, setGwas] = useState<GwasBin[] | null>(null)
+  const [hovered, setHovered] = useState<string | null>(null)
+  const [skipped, setSkipped] = useState(0)
+  const navigate = useNavigate()
+
+  useEffect(() => {
+    // autosomes only: the coloc loci and the DCM GWAS are both autosomal
+    fetchChromSizes('GRCh38')
+      .then(c => { const keep = c.names.map((n, i) => [n, c.lengths[i]!] as const).filter(([n]) => n !== 'chrX' && n !== 'chrY')
+        setChrom({ names: keep.map(k => k[0]), lengths: keep.map(k => k[1]) }) })
+      .catch((e: Error) => setChromError(e.message))
+    searchBySymbols([...new Set([...COLOC_EQTL_GENES, ...COLOC_SQTL_GENES])]).then(setHits)
+    gwasBins().then(setGwas).catch(() => setGwas([]))
+  }, [])
+
+  const bins: TrackBin[] = useMemo(() => (gwas ?? []).map(b => ({
+    chr: b.chr, start: b.bin_start, end: b.bin_end, value: -Math.log10(Math.max(b.min_p, 1e-300)), sig: b.n_gws > 0,
+    title: `${b.chr}:${(b.bin_start / 1e6).toFixed(0)}–${(b.bin_end / 1e6).toFixed(0)} Mb · strongest p ${fmtP(b.min_p)} at ${b.lead_rsid ?? fmtInt(b.lead_position)}` +
+      (b.n_gws > 0 ? ` · ${fmtInt(b.n_gws)} genome-wide significant variants` : '') + ` · ${fmtInt(b.n_variants)} tested`,
+  })), [gwas])
+
+  const loci: TrackLocus[] = useMemo(() => {
+    const e = new Set(COLOC_EQTL_GENES), s = new Set(COLOC_SQTL_GENES)
+    return (hits ?? []).map(h => {
+      const sym = h.symbol ?? h.gene_id
+      const trait = e.has(sym) && s.has(sym) ? 'both' : s.has(sym) ? 'sQTL' : 'eQTL'
+      return { id: h.gene_id, chr: h.chr, start: h.tss, end: h.tss, label: sym, trait }
+    })
+  }, [hits])
+
+  const legend = (
+    <span className="flex flex-wrap items-center justify-end gap-x-4 gap-y-1 text-xs text-base-content/60">
+      {(['eQTL', 'sQTL', 'both'] as const).map(t => (
+        <span key={t} className="inline-flex items-center gap-1.5">
+          {/* inline style: the swatch is the marker's series color, a theme token resolved by the browser */}
+          <span className="inline-block size-2.5 rounded-full" style={{ backgroundColor: TRAIT_COLORS[t] }} />
+          {t === 'both' ? 'eQTL and sQTL' : t}
+        </span>
+      ))}
+      {bins.length > 0 && (
+        <span className="inline-flex items-center gap-1.5">
+          <span className="inline-block h-2.5 w-1.5 bg-error" />
+          DCM GWAS p &lt; 5×10⁻⁸
+        </span>
+      )}
+    </span>
+  )
+
+  return (
+    <SectionPanel
+      title="Loci colocalized with dilated cardiomyopathy risk"
+      description={`Single-locus coloc with the Jurgens et al. 2024 DCM GWAS, PP.H4 > 0.8${loci.length ? `, ${loci.length} loci` : ''}. Click a marker to open the gene.`}
+      action={legend}>
+      {chromError && <div className="text-xs text-error">Chromosome sizes unavailable ({chromError}); the track is hidden.</div>}
+      {/* the track's real height: 80 label pad + 40 bar/labels + 4 gap + 144 GWAS bars */}
+      {!chromError && (!chrom || hits === null) && <Bar className="h-[268px] w-full rounded-lg" />}
+      {chrom && loci.length > 0 && (
+        <div className="min-w-0">
+          <GenomeTrack loci={loci} hoveredLocusId={hovered ?? undefined}
+            onLocusSelect={id => { setHovered(null); if (id) navigate(`/gene/${id}`) }}
+            onSkipped={setSkipped} chromNames={chrom.names} chromLengths={chrom.lengths} traitColors={TRAIT_COLORS} static
+            bins={bins} binCap={BIN_CAP} binHeight={144} binUnit="−log10 p" />
+          {skipped > 0 && <div className="text-xs text-warning">{skipped} locus{skipped > 1 ? 'i' : ''} on chromosomes not in the reference could not be placed.</div>}
+        </div>
+      )}
+    </SectionPanel>
+  )
+}

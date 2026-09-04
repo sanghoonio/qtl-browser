@@ -1,0 +1,57 @@
+# Paths are relative to the repo root.
+raw: data/raw
+derived: data/derived
+zenodo_dir: zenodo_21382723
+gencode_gtf: gencode_v34/gencode.v34.annotation.gtf.gz
+dbsnp_vcf: dbsnp_b157/GCF_000001405.40.gz
+dbsnp_assembly_report: dbsnp_b157/GCF_000001405.40_GRCh38.p14_assembly_report.txt
+dcm_gwas: dcm_gwas_jurgens2024/DCM_GWAS/Jurgens_DCM_GWAS_META.tsv.gz
+gwas_bin_bp: 5000000     # landing-track windows (plan: 5 Mb regardless of what the track shows)
+
+# significance rule (plan D2): permutation p-value < 0.05, the paper's wording
+sig_column: pval_perm
+sig_threshold: 0.05
+
+# parallelism and memory for the nominal re-encoding step
+workers: 3
+duckdb_memory_limit: 6GB
+duckdb_threads: 4
+
+row_group_sizes:
+  trans: 20000     # a gene's trans rows are one group; smaller groups mean a smaller per-gene read
+  variants: 100000
+  gwas: 10000      # ~3 Mb per group, so a 2 Mb cis window reads one or two groups for LocusCompare
+
+# which introns get nominal cis-sQTL rows: `all` (10.8 GB) or `significant` (1.8 GB, the
+# 13,540 introns with pval_perm < 0.05). Every intron keeps its permutation row regardless.
+sqtl_nominal: significant
+
+# Cloudflare R2 bucket the browser reads from (pipeline/upload.py). Credentials come from
+# R2_ACCESS_KEY_ID / R2_SECRET_ACCESS_KEY in the environment, never from here.
+r2:
+  bucket: qtl-browser
+  endpoint: https://02604ac525a365f5ff995694d8c3da5a.r2.cloudflarestorage.com
+  public_url: https://pub-50e5b2fc28324ce29d894eba50691039.r2.dev
+  allowed_origins:            # add the Pages origin once it exists, then re-run `upload.py cors`
+    - http://localhost:5173
+    - http://localhost:4173
+  exclude:                    # relative to data/derived; everything else is uploaded
+    - "_*/*"
+    - ".done/*"
+    - "*.log"
+    - "*.tmp.parquet"
+
+# counts reported in the preprint, used by the validate step (tolerance is fractional)
+paper_counts:
+  egenes: 10241
+  sqtl_sig_phenotypes: 13540
+  tolerance: 0.02
+
+# paper-named variants that must resolve to these rsIDs through the variants table
+paper_variants:
+  chr1:2212668: rs2503715      # SKI
+  chr1:236689867: rs4659701    # ACTN2
+  chr7:128829863: rs73238147   # FLNC
+  chr10:73661450: rs10824026   # MYOZ1 / SYNPO2L (paper eQTL text says 73,646,383, a typo; that is rs3740293. sQTL text and dbSNP agree on 73,661,450)
+  chr4:113537246: rs734348     # CAMK2D
+  chr16:918717: rs9889137      # LMF1
