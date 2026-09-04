@@ -4,10 +4,12 @@ import { ChevronRight } from 'lucide-react'
 import { Empty } from '@/components/states'
 import { fmtInt, fmtNum } from '@/lib/format'
 import type { CredibleSetRow } from '@/lib/queries'
+import { csTint, useIsDark } from '@/lib/plot-theme'
 
 /** One row per credible set, closed by default; expanding lists the member variants. */
 export default function CredibleSetTable({ rows }: { rows: CredibleSetRow[] }) {
   const [open, setOpen] = useState<Set<number>>(new Set())
+  const dark = useIsDark()
   useEffect(() => setOpen(new Set()), [rows])
   if (!rows.length) return <Empty label="No SuSiE credible set." />
 
@@ -35,7 +37,8 @@ export default function CredibleSetTable({ rows }: { rows: CredibleSetRow[] }) {
             const isOpen = open.has(id)
             return (
               <Fragment key={id}>
-                <tr className="cursor-pointer hover:bg-base-200" onClick={() => toggle(id)} aria-expanded={isOpen}>
+                {/* inline style: the row tint is the set's plot color from the chart palette, not a theme token */}
+                <tr className="cursor-pointer hover:brightness-95" onClick={() => toggle(id)} aria-expanded={isOpen} style={{ backgroundColor: csTint(id, dark) }}>
                   <td><ChevronRight className={`size-4 text-base-content/40 transition-transform ${isOpen ? 'rotate-90' : ''}`} /></td>
                   <td className="font-medium">Set {id}</td>
                   <td className="text-right tabular-nums">{members.length}</td>

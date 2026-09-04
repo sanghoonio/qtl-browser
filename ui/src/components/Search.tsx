@@ -81,7 +81,7 @@ export default function Search({ hero = false, autoFocus = false }: { hero?: boo
               <button type="button" onMouseEnter={() => setActive(i)} onClick={() => go(h)}
                 className={`flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-sm transition-colors ${i === active ? 'bg-base-200' : 'hover:bg-base-200'}`}>
                 <span className="font-medium">{h.symbol ?? h.gene_id}</span>
-                <span className="min-w-0 truncate text-xs text-base-content/50">{h.gene_id} · {h.chr}:{h.tss.toLocaleString()}</span>
+                <span className="min-w-0 truncate text-xs text-base-content/55">{h.gene_id} · {h.chr}:{h.tss.toLocaleString()}</span>
                 <span className="ml-auto flex shrink-0 gap-1">
                   {h.is_egene && <span className="badge badge-primary badge-xs">eGene</span>}
                   {h.n_sqtl_sig > 0 && <span className="badge badge-secondary badge-xs">sQTL</span>}

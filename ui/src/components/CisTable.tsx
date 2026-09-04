@@ -6,6 +6,7 @@ import { Pager } from '@/components/pager'
 import { Empty, TableSkeleton } from '@/components/states'
 import { fmtBp, fmtNum, fmtP, rsFromNumber } from '@/lib/format'
 import { cisAll, cisCount, cisRows, type CisQuery, type CisRow } from '@/lib/queries'
+import { csTint, useIsDark } from '@/lib/plot-theme'
 import { downloadCSV } from '@/lib/csv'
 
 const SKEL = [{ w: 'w-24' }, { w: 'w-20' }, { w: 'w-10' }, { w: 'w-14', align: 'right' as const }, { w: 'w-10', align: 'right' as const },
@@ -39,6 +40,8 @@ export default function CisTable({ query, fileStem }: { query: CisQuery; fileSte
     }, search ? 150 : 0)
     return () => { alive = false; clearTimeout(t) }
   }, [key, sort, maxP, search, offset, pageSize]) // eslint-disable-line react-hooks/exhaustive-deps
+
+  const dark = useIsDark()
 
   async function exportCSV() {
     const all = await cisAll(query)
@@ -83,7 +86,8 @@ export default function CisTable({ query, fileStem }: { query: CisQuery; fileSte
               </thead>
               <tbody>
                 {data.map((r, i) => (
-                  <tr key={i} className={`hover:bg-base-200 ${r.pip != null ? 'bg-base-200/70' : ''}`}>
+                  // inline style: credible-set rows take the set's plot color from the chart palette
+                  <tr key={i} className={r.cs_id != null ? 'hover:brightness-95' : 'hover:bg-base-200'} style={{ backgroundColor: csTint(r.cs_id, dark) }}>
                     <td className="tabular-nums">{r.position.toLocaleString()}</td>
                     <td><Link className="link-quiet" to={`/variant/${r.rs_number != null ? rsFromNumber(r.rs_number) : `${query.hit.chr}:${r.position}`}`}>{r.rs_number != null ? rsFromNumber(r.rs_number) : <span className="text-base-content/40">{query.hit.chr}:{r.position}</span>}</Link></td>
                     <td className="font-mono text-xs text-base-content/60">{r.A1}/{r.A2}</td>

@@ -8,6 +8,8 @@
  * credible-set table below the plot is the table view. Variants in no set are the neutral
  * background, a warm gray matched to each surface.
  */
+import { useEffect, useState } from 'react'
+
 export const CS_DOMAIN = ['none', '1', '2', '3', '4', '5'] as const
 export const CS_COLORS = {
   light: ['#b8b3b1', '#2a78d6', '#1baf7a', '#eda100', '#008300', '#e34948'],
@@ -26,4 +28,24 @@ export const CS_SWATCH_CLIP: Record<string, string | undefined> = {
 }
 export function isDark(): boolean {
   return document.documentElement.getAttribute('data-theme') === 'topchef-dark'
+}
+
+/** Current theme as state, updated when the theme toggle changes `data-theme`. */
+export function useIsDark(): boolean {
+  const [dark, setDark] = useState(isDark)
+  useEffect(() => {
+    const obs = new MutationObserver(() => setDark(isDark()))
+    obs.observe(document.documentElement, { attributes: true, attributeFilter: ['data-theme'] })
+    return () => obs.disconnect()
+  }, [])
+  return dark
+}
+
+/** Row background for a credible set: the set's plot color at low alpha, so table rows and
+ *  plot markers read as the same thing. `undefined` for variants in no set. */
+export function csTint(csId: number | string | null | undefined, dark: boolean): string | undefined {
+  if (csId == null) return undefined
+  const i = CS_DOMAIN.indexOf(String(csId) as (typeof CS_DOMAIN)[number])
+  if (i <= 0) return undefined
+  return CS_COLORS[dark ? 'dark' : 'light'][i] + (dark ? '1f' : '14')
 }

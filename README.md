@@ -61,5 +61,8 @@ does.
   7 GB for the R2 free tier instead of 16. Every intron keeps its permutation row.
 - The 21 eQTL and 4 sQTL colocalized genes are hard-coded from the authors' list until the coloc
   tables (PP.H4, sentinels) are shared; `coloc.parquet` is an empty stub for them.
-- DCM GWAS: full meta-analysis as position-sorted parquet for LocusCompare, plus a 5 Mb-binned
-  table for the landing track.
+- DCM GWAS: Jurgens 2024 biobanks-only meta-analysis (5,022 cases / 932,941 controls), the set
+  the preprint's figures were drawn from although its Methods cite the full meta-analysis
+  (9,365 / 946,368). Position-sorted parquet for LocusCompare plus a 5 Mb-binned table for
+  the landing track; `pipeline/config.yaml` `dcm_gwas` picks the file, and the full-meta build
+  is parked at `data/derived/_full/gwas_meta/`.

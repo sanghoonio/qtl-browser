@@ -18,6 +18,8 @@ export default function About() {
   const sources = (m?.sources ?? {}) as Record<string, { version: string; description: string }>
   const tables = (m?.tables ?? {}) as Record<string, { rows: number; bytes: number; load: string }>
   const counts = (m?.counts ?? {}) as Record<string, number>
+  const gwas = (m?.gwas_dcm ?? null) as { file: string; n_cases: number; n_controls: number; variants: number } | null
+  const gwasSet = gwas?.file.includes('BiobanksOnly') ? 'biobank-only meta-analysis' : gwas?.file.includes('MTAG') ? 'MTAG analysis' : 'meta-analysis'
   return (
     <Page>
       <div className="mx-auto max-w-4xl">
@@ -48,8 +50,9 @@ export default function About() {
             </ul>
             <h2>DCM GWAS comparison</h2>
             <p>
-              The landing track and the QTL-versus-GWAS panel use the dilated cardiomyopathy meta-analysis of{' '}
-              <ExternalLink href={GWAS_PAPER}>Jurgens et al. 2024</ExternalLink> from the{' '}
+              The landing track and the QTL-versus-GWAS panel use the dilated cardiomyopathy {gwasSet} of{' '}
+              <ExternalLink href={GWAS_PAPER}>Jurgens et al. 2024</ExternalLink>
+              {gwas && <> ({gwas.n_cases.toLocaleString()} cases, {gwas.n_controls.toLocaleString()} controls)</>} from the{' '}
               <ExternalLink href={CVDKP}>Cardiovascular Disease Knowledge Portal</ExternalLink>. Variants are matched on GRCh38
               position and alleles in either orientation, and the GWAS effect is signed to the QTL effect allele. The landing
               track shows the strongest GWAS p-value per 5 Mb window, red where the window holds a genome-wide significant
@@ -91,10 +94,10 @@ export default function About() {
           </SectionPanel>
 
           <div className="flex flex-wrap gap-x-4 text-sm">
-            <ExternalLink href={PREPRINT}>Preprint</ExternalLink>
-            <ExternalLink href={ZENODO}>Summary statistics on Zenodo</ExternalLink>
-            <ExternalLink href={PIPELINE}>QTL mapping pipeline (nf-eqtls)</ExternalLink>
-            <ExternalLink href={REPO}>Browser source</ExternalLink>
+            <ExternalLink className="underline" href={PREPRINT}>Preprint</ExternalLink>
+            <ExternalLink className="underline" href={ZENODO}>Summary statistics on Zenodo</ExternalLink>
+            <ExternalLink className="underline" href={PIPELINE}>QTL mapping pipeline (nf-eqtls)</ExternalLink>
+            <ExternalLink className="underline" href={REPO}>Browser source</ExternalLink>
           </div>
         </div>
       </div>

@@ -7,7 +7,7 @@ export function KvTable({ title, rows, align = 'left' }: { title?: string; rows:
   if (!rows.length) return null
   return (
     <div className="space-y-2">
-      {title && <h3 className="text-sm font-semibold uppercase tracking-wide text-base-content/50">{title}</h3>}
+      {title && <h3 className="text-sm font-semibold uppercase tracking-wide text-base-content/65">{title}</h3>}
       <div className="overflow-x-auto rounded-lg border border-base-300 bg-base-100">
         <table className="table table-sm w-full text-xs">
           <tbody>

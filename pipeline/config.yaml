@@ -5,7 +5,11 @@ zenodo_dir: zenodo_21382723
 gencode_gtf: gencode_v34/gencode.v34.annotation.gtf.gz
 dbsnp_vcf: dbsnp_b157/GCF_000001405.40.gz
 dbsnp_assembly_report: dbsnp_b157/GCF_000001405.40_GRCh38.p14_assembly_report.txt
-dcm_gwas: dcm_gwas_jurgens2024/DCM_GWAS/Jurgens_DCM_GWAS_META.tsv.gz
+# Jurgens 2024 summary statistics for the landing track and LocusCompare. The CVDKP zip holds
+# five sets; the preprint's Methods cite the full META (9,365 cases / 946,368 controls) but its
+# figures were drawn from BiobanksOnly (5,022 / 932,941), which is what the browser matches.
+# The META build is parked at data/derived/_full/gwas_meta/.
+dcm_gwas: dcm_gwas_jurgens2024/DCM_GWAS/Jurgens_DCM_GWAS_META_BiobanksOnly.tsv.gz
 gwas_bin_bp: 5000000     # landing-track windows (plan: 5 Mb regardless of what the track shows)
 
 # significance rule (plan D2): permutation p-value < 0.05, the paper's wording

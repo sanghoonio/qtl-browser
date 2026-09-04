@@ -60,7 +60,8 @@ export default function GeneTrack({ spec, width, marginLeft, dark }: { spec: Tra
     const neighbors = lanes.map(l => ({ ...l, y: -(l.lane + 1) }))
     const ink = dark ? '#c3c2b7' : '#52514e'
     const muted = dark ? '#5a4d4a' : '#b8b3b1'   // warm grays matched to the theme surfaces
-    const accent = dark ? '#3987e5' : '#2a78d6'
+    // the gene of interest is drawn in ink, not a hue: the hues above it belong to credible sets
+    const accent = ink
     const laneH = 18
     const height = 16 + laneH * (nLanes + 1) + 8
     // plain columns only: vgplot treats string channels as fields of the array data

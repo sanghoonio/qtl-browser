@@ -83,6 +83,9 @@ export default function LocusPlot({ spec, onCount, onLegend, onExportMenu }: {
 }) {
   const host = useRef<HTMLDivElement>(null)
   const [state, setState] = useState<'loading' | 'ready' | 'error'>('loading')
+  // which locus the ready state belongs to: a new spec renders once before its effect flips
+  // state to loading, and the gene track must not redraw for the new intron in that frame
+  const [readyFor, setReadyFor] = useState<string | null>(null)
   const [width, setWidth] = useState(0)
   const [tableName, setTableName] = useState<string | null>(null)
   const [link, setLink] = useState<Selection | null>(null)
@@ -177,6 +180,7 @@ export default function LocusPlot({ spec, onCount, onLegend, onExportMenu }: {
       ) as HTMLElement
       el.replaceChildren(plot)
       setState('ready')
+      setReadyFor(key)
     } catch (e) {
       console.error(e)
       setState('error')
@@ -187,12 +191,13 @@ export default function LocusPlot({ spec, onCount, onLegend, onExportMenu }: {
   const compareCol = useRef<HTMLDivElement>(null)
   const stem = `${spec.hit.symbol ?? spec.hit.gene_id}${spec.phenotypeId ? '_' + spec.phenotypeId.split(':').slice(0, 3).join('_') : ''}`
   useEffect(() => {
-    onExportMenu?.(state === 'ready' ? (
-      <ExportMenu background={dark ? SURFACE.dark : SURFACE.light} targets={[
+    // the button stays in place while a locus loads, disabled, so the header does not reflow
+    onExportMenu?.(
+      <ExportMenu disabled={state !== 'ready'} background={dark ? SURFACE.dark : SURFACE.light} targets={[
         { label: 'Locus plot with gene track', name: `${stem}_locus`, el: () => column.current },
         { label: 'QTL versus GWAS', name: `${stem}_locuscompare`, el: () => compareCol.current },
       ]} />
-    ) : null)
+    )
   }, [state, dark, stem]) // eslint-disable-line react-hooks/exhaustive-deps
 
   return (
@@ -202,7 +207,7 @@ export default function LocusPlot({ spec, onCount, onLegend, onExportMenu }: {
         {state === 'error' && <div className="p-4 text-sm text-error">Could not draw the locus.</div>}
         <div ref={host} className={`plot-host ${state === 'ready' ? '' : 'invisible'}`}
           onPointerMove={onPlotPointerMove} onPointerLeave={clearPlotHover} />
-        {state === 'ready' && width > 0 && (
+        {state === 'ready' && readyFor === key && width > 0 && (
           <GeneTrack spec={{ chr: spec.hit.chr, geneId: spec.hit.gene_id, domain: [spec.tss - 1_000_000, spec.tss + 1_000_000], intron: spec.intron }}
             width={width} marginLeft={MARGIN_LEFT} dark={dark} />
         )}

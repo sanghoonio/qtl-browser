@@ -2,10 +2,19 @@ import { Download } from 'lucide-react'
 import { exportPNG, exportSVG } from '@/lib/export-plot'
 
 /** Small dropdown offering PNG and SVG exports of one or more plot containers. */
-export default function ExportMenu({ targets, background }: {
+export default function ExportMenu({ targets, background, disabled = false }: {
   targets: { label: string; name: string; el: () => HTMLElement | null }[]
   background: string
+  disabled?: boolean
 }) {
+  // -my-1: the 24 px button sits inside a 16 px description line without making that line taller
+  if (disabled) {
+    return (
+      <button className="btn btn-xs -my-1 gap-1 rounded-lg border-base-300 font-medium" disabled title="Export plots">
+        <Download className="size-3" /> Export
+      </button>
+    )
+  }
   const run = (t: (typeof targets)[number], fmt: 'png' | 'svg') => {
     const el = t.el()
     if (!el) return
@@ -14,7 +23,7 @@ export default function ExportMenu({ targets, background }: {
     ;(document.activeElement as HTMLElement | null)?.blur()   // close the focus-driven dropdown
   }
   return (
-    <div className="dropdown dropdown-end">
+    <div className="dropdown dropdown-end -my-1">
       <button tabIndex={0} className="btn btn-xs gap-1 rounded-lg border-base-300 font-medium" title="Export plots">
         <Download className="size-3" /> Export
       </button>

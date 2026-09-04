@@ -21,21 +21,21 @@ export default function Home() {
     <Page>
       <div className="mt-8">
         <h1 className="text-4xl font-extralight tracking-tight">TOPCHeF</h1>
-        <SentenceLines className="mt-2.75 text-sm text-base-content/50" sentences={[
+        <SentenceLines className="mt-2.75 text-sm text-base-content/55" sentences={[
           'Expression and splicing QTL mapped in left-ventricle tissue from failing and non-failing human hearts.',
           // the counts come from the manifest fetch; hold the line's height until then so the
           // search bar and track do not move down when it lands
           counts ? `${fmtInt(counts.egenes)} eGenes and ${fmtInt(counts.sqtl_sig_phenotypes)} sQTL introns across ${fmtInt(counts.genes_tested)} tested genes; ${COLOC_EQTL_GENES.length} eGenes and ${COLOC_SQTL_GENES.length} sGenes colocalize with dilated cardiomyopathy (DCM) risk.` : ' ',
           <>
             Search a gene, variant, or region for summary statistics, fine-mapping, and locus views.
-            <span className="ml-3 inline-flex gap-x-4">
+            <span className="ml-3 inline-flex gap-x-3">
               <ExternalLink className="underline" href={PREPRINT}>Preprint</ExternalLink>
               <ExternalLink className="underline" href={ZENODO}>Zenodo</ExternalLink>
             </span>
           </>,
         ]} />
         <div className="mt-6"><Search hero autoFocus /></div>
-        <p className="mt-1.5 text-xs text-base-content/50">
+        <p className="mt-1.5 text-xs text-base-content/55">
           Try <Link className="link-quiet" to="/gene/ENSG00000128591">FLNC</Link>,{' '}
           <Link className="link-quiet" to="/gene/ENSG00000157933">SKI</Link>,{' '}
           <Link className="link-quiet" to="/variant/rs2503715">rs2503715</Link>, or{' '}

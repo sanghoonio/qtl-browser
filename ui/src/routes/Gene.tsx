@@ -155,7 +155,7 @@ function SqtlTab({ hit }: { hit: SearchHit }) {
   return (
     <div className="space-y-8">
       <SectionPanel title="Splice phenotypes"
-        description={`${fmtInt(visible.length)} of ${fmtInt(phens.length)} tested introns with a significant sQTL; click a row to load its locus.`}>
+        description={`${fmtInt(visible.length)} of ${fmtInt(phens.length)} tested introns with a significant sQTL. Click a row to load its locus.`}>
         {visible.length === 0 ? <Empty label={`None of the ${fmtInt(phens.length)} tested introns has a significant sQTL.`} /> : (
           <div className="overflow-x-auto rounded-lg border border-base-300">
             <table className="table table-sm">

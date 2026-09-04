@@ -33,7 +33,14 @@ def full(cfg: Config) -> None:
             continue
         write_parquet(t, cfg.derived / "gwas_dcm" / f"chr={c}" / "data.parquet", int(cfg["row_group_sizes"]["gwas"]), stats_columns=["position"])
         total += t.num_rows
-    log(f"gwas_full: {total:,} variants -> gwas_dcm/chr=*/data.parquet")
+    # which of the Jurgens sets this is, for the manifest and the About page
+    n_cases, n_controls = con.execute(f"""
+        SELECT max(N_cases), max(N_controls) FROM read_csv('{src}', delim='\\t', header=true, columns={COLUMNS})""").fetchone()
+    import json
+    (cfg.derived / "gwas_dcm.json").write_text(json.dumps({
+        "file": src.name, "n_cases": n_cases, "n_controls": n_controls, "variants": total,
+    }, indent=2))
+    log(f"gwas_full: {total:,} variants from {src.name} ({n_cases:,} cases / {n_controls:,} controls) -> gwas_dcm/chr=*/data.parquet")
 
 
 def run(cfg: Config) -> None:

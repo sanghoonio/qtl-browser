@@ -58,7 +58,7 @@ def manifest(cfg: Config) -> None:
         "counts": counts,
         "sources": {s["name"]: {"version": s.get("version"), "description": s.get("description")} for s in sources["sources"]},
         "tables": tables,
-        "gwas_dcm": None,
+        "gwas_dcm": json.loads((cfg.derived / "gwas_dcm.json").read_text()) if (cfg.derived / "gwas_dcm.json").exists() else None,
     }
     (cfg.derived / "manifest.json").write_text(json.dumps(out, indent=2))
     log(f"manifest: {len(tables)} tables, eGenes={counts['egenes']}, sQTL sig={counts['sqtl_sig_phenotypes']}")
