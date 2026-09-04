@@ -27,9 +27,11 @@ export default {
     object.writeHttpMetadata(headers)
     headers.set('ETag', object.httpEtag)
     headers.set('Accept-Ranges', 'bytes')
-    // parquet and the manifest change only on a pipeline rebuild, which rewrites the same
-    // keys: an hour of browser caching keeps repeat visits cheap without hiding a rebuild for long
-    headers.set('Cache-Control', key.endsWith('manifest.json') ? 'no-cache' : 'public, max-age=3600')
+    // no-store, deliberately: Chrome keeps one cache entry per URL and serialises requests to
+    // it, and every range request to a parquet file is the same URL. Cached 206 responses made
+    // later ranges wait on the entry lock for seconds, up to Chrome's 20 s lock timeout.
+    // DuckDB reads each footer once per session anyway, so the browser cache bought nothing.
+    headers.set('Cache-Control', 'no-store')
 
     if (!('body' in object)) return new Response(null, { status: 304, headers })   // onlyIf matched
 
