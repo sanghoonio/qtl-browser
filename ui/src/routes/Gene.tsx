@@ -60,7 +60,7 @@ export default function Gene() {
         <Empty label={`${sym} is annotated in GENCODE v34 but was not tested for QTL (filtered out by expression or mappability).`} />
       ) : (
         <>
-          {tab === 'eqtl' && (g ? <EqtlTab hit={hit} g={g} /> : <TabSkeleton plot />)}
+          {tab === 'eqtl' && (g ? <EqtlTab hit={hit} g={g} /> : <TabSkeleton plot chr={hit.chr} />)}
           {tab === 'sqtl' && (g ? <><GeneTable g={g} /><SqtlTab hit={hit} /></> : <TabSkeleton kvRows={4} />)}
           {tab === 'trans' && (g ? <><GeneTable g={g} /><TransTab hit={hit} /></> : <TabSkeleton kvRows={4} />)}
         </>

@@ -3,7 +3,6 @@ import { useNavigate } from 'react-router'
 import { GenomeTrack } from '@/components/genome-track/genome-track'
 import type { TrackBin, TrackLocus } from '@/components/genome-track/types'
 import { SectionPanel } from '@/components/section-panel'
-import { Bar } from '@/components/states'
 import { fetchChromSizes, type ChromSizes } from '@/lib/chrom-sizes'
 import { COLOC_EQTL_GENES, COLOC_SQTL_GENES } from '@/lib/coloc'
 import { fmtInt, fmtP } from '@/lib/format'
@@ -78,11 +77,13 @@ export default function ColocLoci() {
     <SectionPanel
       title="Loci colocalized with dilated cardiomyopathy risk"
       description={`Single-locus coloc with the Jurgens et al. 2024 DCM GWAS, PP.H4 > 0.8${loci.length ? `, ${loci.length} loci` : ''}. Click a marker to open the gene.`}
-      action={legend}>
+      action={hits !== null && gwas !== null ? legend : undefined}>
       {chromError && <div className="text-xs text-error">Chromosome sizes unavailable ({chromError}); the track is hidden.</div>}
-      {/* the track's real height: 80 label pad + 40 bar/labels + 4 gap + 144 GWAS bars */}
-      {!chromError && (!chrom || hits === null) && <Bar className="h-[268px] w-full rounded-lg" />}
-      {chrom && loci.length > 0 && (
+      {/* the track draws as soon as chromosome sizes are known (cached after the first visit);
+          markers and GWAS bars fade in on top when their queries return, without moving it.
+          Until then the space is held empty at the track's height: 80 pad + 40 bar/labels + 4 + 144 */}
+      {!chromError && !chrom && <div className="h-[268px]" aria-busy="true" />}
+      {chrom && (
         <div className="min-w-0">
           <GenomeTrack loci={loci} hoveredLocusId={hovered ?? undefined}
             onLocusSelect={id => { setHovered(null); if (id) navigate(`/gene/${id}`) }}

@@ -85,6 +85,21 @@
 /* In-content links (gene symbols, rsIDs, external references) stay in the ink color with a
    quiet underline; the primary color is reserved for actions, the active nav item, and the
    eQTL series. */
+/* data landing on the genome track: bars grow down from the baseline (staggered left to right
+   by the caller), markers rise in; both quick */
+@theme {
+  --animate-grow-down: grow-down 0.35s cubic-bezier(0.2, 0.8, 0.2, 1) both;
+  --animate-rise-in: rise-in 0.2s ease-out both;
+  @keyframes grow-down {
+    from { transform: scaleY(0); }
+    to { transform: scaleY(1); }
+  }
+  @keyframes rise-in {
+    from { opacity: 0; transform: translateY(3px); }
+    to { opacity: 1; transform: translateY(0); }
+  }
+}
+
 @utility link-quiet {
   color: var(--color-base-content);
   text-underline-offset: 2px;

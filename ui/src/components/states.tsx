@@ -1,3 +1,5 @@
+import { CompareSkeleton, LocusSkeleton } from '@/components/plot-skeleton'
+
 export function Loading({ label = 'Loading…' }: { label?: string }) {
   return <div className="flex items-center gap-2 p-4 text-sm text-base-content/60"><span className="loading loading-spinner loading-sm" /> {label}</div>
 }
@@ -48,16 +50,16 @@ export function KvSkeleton({ rows = 6 }: { rows?: number }) {
 
 /** The body of a gene-page tab: two kv tables side by side and, when `plot`, the locus row
  *  (wide scatter + square LocusCompare) at the plots' real height. */
-export function TabSkeleton({ plot = false, kvRows = 9 }: { plot?: boolean; kvRows?: number }) {
+export function TabSkeleton({ plot = false, kvRows = 9, chr }: { plot?: boolean; kvRows?: number; chr?: string }) {
   return (
     <div className="space-y-8" aria-busy="true">
       <div className="grid items-start gap-4 md:grid-cols-2"><KvSkeleton rows={kvRows} /><KvSkeleton rows={kvRows} /></div>
       {plot && (
         <div className="space-y-3">
-          <Bar className="h-3 w-16" />
+          <h2 className="text-sm font-medium text-base-content/60">Locus</h2>
           <div className="flex flex-col gap-6 md:flex-row md:gap-2">
-            <Bar className="h-[290px] min-w-0 flex-1 rounded-lg" />
-            <Bar className="size-[290px] shrink-0 rounded-lg" />
+            <div className="min-w-0 flex-1"><LocusSkeleton chr={chr} /></div>
+            <div className="size-[290px] shrink-0"><CompareSkeleton /></div>
           </div>
         </div>
       )}
@@ -67,7 +69,7 @@ export function TabSkeleton({ plot = false, kvRows = 9 }: { plot?: boolean; kvRo
 
 /** A detail page before its identity resolves: breadcrumb, title + id, a chip row, then the
  *  tab body (with the locus row on gene pages). */
-export function DetailSkeleton({ plot = false, kvRows = 9 }: { plot?: boolean; kvRows?: number }) {
+export function DetailSkeleton({ plot = false, kvRows = 9, chr }: { plot?: boolean; kvRows?: number; chr?: string }) {
   return (
     <div aria-busy="true">
       <div className="mb-8 mt-2 space-y-3">
@@ -78,7 +80,7 @@ export function DetailSkeleton({ plot = false, kvRows = 9 }: { plot?: boolean; k
         </div>
         <div className="flex gap-1.5"><Bar className="h-5 w-14 rounded-full" /><Bar className="h-5 w-24 rounded-full" /></div>
       </div>
-      <TabSkeleton plot={plot} kvRows={kvRows} />
+      <TabSkeleton plot={plot} kvRows={kvRows} chr={chr} />
     </div>
   )
 }

@@ -4,7 +4,7 @@ import { Selection } from '@uwdata/mosaic-core'
 import { dropTable, getCoordinator, getDB, lit, materializeLocus, parquet } from '@/lib/db'
 import { CS_COLORS, CS_DOMAIN, CS_SWATCH_CLIP, CS_SYMBOLS, isDark } from '@/lib/plot-theme'
 import type { SearchHit } from '@/lib/queries'
-import { Bar } from '@/components/states'
+import { CompareSkeleton, LocusSkeleton } from '@/components/plot-skeleton'
 import GeneTrack from '@/components/GeneTrack'
 import LocusCompare from '@/components/LocusCompare'
 import { clearPlotHover, onPlotPointerMove } from '@/lib/plot-hover'
@@ -198,7 +198,7 @@ export default function LocusPlot({ spec, onCount, onLegend, onExportMenu }: {
   return (
     <div className="flex flex-col gap-6 md:flex-row md:gap-2">
       <div ref={column} className="relative min-h-[340px] min-w-0 flex-1">
-        {state === 'loading' && <Bar className="h-[290px] w-full rounded-lg" />}
+        {state === 'loading' && <LocusSkeleton chr={spec.hit.chr} />}
         {state === 'error' && <div className="p-4 text-sm text-error">Could not draw the locus.</div>}
         <div ref={host} className={`plot-host ${state === 'ready' ? '' : 'invisible'}`}
           onPointerMove={onPlotPointerMove} onPointerLeave={clearPlotHover} />
@@ -212,7 +212,7 @@ export default function LocusPlot({ spec, onCount, onLegend, onExportMenu }: {
       <div ref={compareCol} className="shrink-0" style={{ width: SCATTER_H }}>
         {state === 'ready' && tableName && link
           ? <LocusCompare table={tableName} dark={dark} size={Math.min(SCATTER_H, Math.max(width, 200))} yDomain={[0, yMax]} link={link} />
-          : <Bar className="aspect-square w-full rounded-lg" />}
+          : <CompareSkeleton />}
       </div>
     </div>
   )

@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, type ReactNode } from 'react'
+import { useLayoutEffect, useRef, useState, type ReactNode } from 'react'
 
 /**
  * Sentences on separate lines while every sentence fits on one line; as soon as any of them
@@ -10,7 +10,9 @@ export default function SentenceLines({ sentences, className = '' }: { sentences
   const probe = useRef<HTMLParagraphElement>(null)
   const [block, setBlock] = useState(false)
 
-  useEffect(() => {
+  // layout effect: measured and decided before the first paint, so the text never shows in
+  // one arrangement and then switches
+  useLayoutEffect(() => {
     const el = probe.current
     if (!el) return
     const check = () => {

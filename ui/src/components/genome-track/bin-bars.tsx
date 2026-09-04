@@ -25,7 +25,10 @@ export function BinBars({ bins, layout, topY, height, cap, threshold, unit }: {
         const h = scale(b.value)
         const clipped = b.value > cap
         return (
-          <g key={i} pointerEvents="all">
+          // grows down from the baseline on mount, sweeping left to right across the genome
+          // (inline style: the per-bar delay is computed from its position)
+          <g key={i} pointerEvents="all" className="animate-grow-down origin-top [transform-box:fill-box]"
+            style={{ animationDelay: `${xEnd ? (x0 / xEnd) * 250 : 0}ms` }}>
             <rect x={x0 + 0.5} y={topY} width={w} height={Math.max(h, 0.5)} rx={0.5}
               className={b.sig ? 'fill-error' : 'fill-base-content/20'} />
             {clipped && <rect x={x0 + 0.5} y={topY + height - 2} width={w} height={2} className="fill-base-100" />}

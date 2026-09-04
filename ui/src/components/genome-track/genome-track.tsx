@@ -1,4 +1,4 @@
-import { forwardRef, useCallback, useEffect, useImperativeHandle, useMemo, useRef, useState } from 'react'
+import { forwardRef, useCallback, useEffect, useImperativeHandle, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { isCluster, type TrackBin, type TrackItem, type TrackLocus, type ViewState } from './types'
 import { useTrackLayout } from './use-track-layout'
 import { useGenomeZoom } from './use-genome-zoom'
@@ -58,15 +58,20 @@ export const GenomeTrack = forwardRef<GenomeTrackHandle, GenomeTrackProps>(funct
   { loci, selectedLocusId, hoveredLocusId, onLocusSelect, onViewChange: onViewChangeProp, onSkipped, chromNames, chromLengths, traitColors, highlightRegion,
     static: isStatic = false, bins, binCap = 20, binHeight = BIN_AREA, binThreshold, binUnit, className }, ref,
 ) {
-  const TOTAL_HEIGHT = ZOOM_PAD_TOP + CONTENT_HEIGHT + (bins?.length ? BIN_GAP + binHeight : 0)
+  // an empty `bins` array still reserves the bar area, so the track does not move when bins arrive
+  const TOTAL_HEIGHT = ZOOM_PAD_TOP + CONTENT_HEIGHT + (bins ? BIN_GAP + binHeight : 0)
   const containerRef = useRef<HTMLDivElement>(null)
   const svgRef = useRef<SVGSVGElement>(null)
-  const [containerWidth, setContainerWidth] = useState(800)
+  // 0 until measured; the SVG is not drawn before then, so the first painted frame is already
+  // at the real width (a default width here showed for one frame and then jumped)
+  const [containerWidth, setContainerWidth] = useState(0)
   const [view, setView] = useState<ViewState>({ startBp: 0, endBp: 1 })
 
-  useEffect(() => {
+  useLayoutEffect(() => {
     const el = containerRef.current
     if (!el) return
+    const w = el.getBoundingClientRect().width
+    if (w > 0) setContainerWidth(w)
     const obs = new ResizeObserver(entries => {
       const w = entries[0]?.contentRect.width
       if (w && w > 0) setContainerWidth(w)
@@ -218,8 +223,9 @@ export const GenomeTrack = forwardRef<GenomeTrackHandle, GenomeTrackProps>(funct
   })() : null
 
   return (
-    <div ref={containerRef} data-genome-track className={className}>
-      <svg ref={svgRef} width={containerWidth} height={TOTAL_HEIGHT} className="select-none overflow-visible" onClick={handleClick} onMouseMove={handleMouseMove}>
+    // inline style: the height holds the space on the unmeasured first frame, before the SVG exists
+    <div ref={containerRef} data-genome-track className={className} style={{ height: TOTAL_HEIGHT }}>
+      {containerWidth > 0 && <svg ref={svgRef} width={containerWidth} height={TOTAL_HEIGHT} className="select-none overflow-visible" onClick={handleClick} onMouseMove={handleMouseMove}>
         {/* hit surface first so labels (which opt back into pointer events) stay on top */}
         <rect width={containerWidth} height={TOTAL_HEIGHT} fill="transparent" />
         <g pointerEvents="none" transform={`translate(${INSET_X},${ZOOM_PAD_TOP})`}>
@@ -234,10 +240,15 @@ export const GenomeTrack = forwardRef<GenomeTrackHandle, GenomeTrackProps>(funct
             <BinBars bins={bins} layout={layout} topY={CONTENT_HEIGHT + BIN_GAP} height={binHeight} cap={binCap} threshold={binThreshold} unit={binUnit} />
           )}
           <ChromosomeTrack layout={layout} barY={BAR_Y} barHeight={BAR_HEIGHT} />
-          <LocusMarkers items={trackItems} layout={layout} barY={BAR_Y} selectedLocusId={selectedLocusId} hoveredLocusId={hoveredLocusId} traitColors={traitColors}
-            showLabels={isStatic} onLabelClick={id => onLocusSelect(id)} />
+          {/* mounts when loci arrive, so the rise-in runs once as the data lands */}
+          {trackItems.length > 0 && (
+            <g className="animate-rise-in">
+              <LocusMarkers items={trackItems} layout={layout} barY={BAR_Y} selectedLocusId={selectedLocusId} hoveredLocusId={hoveredLocusId} traitColors={traitColors}
+                showLabels={isStatic} onLabelClick={id => onLocusSelect(id)} />
+            </g>
+          )}
         </g>
-      </svg>
+      </svg>}
     </div>
   )
 })
