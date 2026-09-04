@@ -1,6 +1,6 @@
 import type { TrackLayout } from './use-track-layout'
 
-const CHROM_GAP = 2
+export const CHROM_GAP = 2   // pixels between chromosome segments; the bin bars respect it too
 
 /** Rounded segment per chromosome, alternating tints from the theme, label beneath. */
 export function ChromosomeTrack({ layout, barY, barHeight }: { layout: TrackLayout; barY: number; barHeight: number }) {
