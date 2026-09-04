@@ -35,20 +35,31 @@ ENCODING = {
 }
 
 
-def _regroup(src: Path, out: Path, group_col: str, stats_columns: list[str], encoding: dict[str, str]) -> int:
-    """Stream `src` (sorted by group_col) into `out` with one row group per group value."""
+def _regroup(src: Path, out_dir: Path, group_col: str, stats_columns: list[str], encoding: dict[str, str]) -> tuple[int, int]:
+    """Stream `src` (sorted by bin, then group_col) into `out_dir/bin=<bin>/data.parquet` files,
+    one row group per group value. The `bin` column is consumed by the path and not written.
+    Returns (row groups, files)."""
     pf = pq.ParquetFile(src)
-    writer = pq.ParquetWriter(out, pf.schema_arrow, compression="zstd", compression_level=9,
-                              use_dictionary=[c for c in pf.schema_arrow.names if c not in encoding],
-                              column_encoding=encoding, write_statistics=stats_columns)
+    schema = pf.schema_arrow.remove(pf.schema_arrow.get_field_index("bin"))
+    writer: pq.ParquetWriter | None = None
     buf: list[pa.Table] = []
     cur = None
-    n = 0
+    cur_bin = None
+    n = files = 0
+
+    def open_writer(b: int):
+        nonlocal writer, files
+        path = out_dir / f"bin={b}" / "data.parquet"
+        path.parent.mkdir(parents=True, exist_ok=True)
+        writer = pq.ParquetWriter(path, schema, compression="zstd", compression_level=9,
+                                  use_dictionary=[c for c in schema.names if c not in encoding],
+                                  column_encoding=encoding, write_statistics=stats_columns)
+        files += 1
 
     def flush():
         nonlocal buf, n
         if buf:
-            t = pa.concat_tables(buf)
+            t = pa.concat_tables(buf).drop_columns(["bin"])
             writer.write_table(t, row_group_size=t.num_rows)
             n += 1
             buf = []
@@ -59,6 +70,7 @@ def _regroup(src: Path, out: Path, group_col: str, stats_columns: list[str], enc
             col = t[group_col].combine_chunks()
             if len(col) == 0:
                 continue
+            bins = t["bin"].combine_chunks()
             shifted = col.slice(1)
             idx = pc.indices_nonzero(pc.not_equal(col.slice(0, len(col) - 1), shifted)).to_pylist()
             starts = [0] + [i + 1 for i in idx]
@@ -68,11 +80,18 @@ def _regroup(src: Path, out: Path, group_col: str, stats_columns: list[str], enc
                 if g != cur:
                     flush()
                     cur = g
+                    b = bins[s].as_py()
+                    if b != cur_bin:
+                        if writer is not None:
+                            writer.close()
+                        open_writer(b)
+                        cur_bin = b
                 buf.append(t.slice(s, e - s))
         flush()
     finally:
-        writer.close()
-    return n
+        if writer is not None:
+            writer.close()
+    return n, files
 
 
 def _one(args) -> tuple[str, str, int, int]:
@@ -82,7 +101,7 @@ def _one(args) -> tuple[str, str, int, int]:
     work_tmp = cfg.tmp / f"nominal-{qtl_type}-{chrom}"
     con = connect(cfg, memory_limit=cfg["duckdb_memory_limit"], threads=cfg["duckdb_threads"], temp_dir=work_tmp)
     con.execute("SET preserve_insertion_order = true")
-    ann = cfg.derived / "gene_annotation.parquet"
+    genes = cfg.derived / "genes.parquet"
     vpos = cfg.derived / "variants_by_position" / f"chr={chrom}" / "data.parquet"
     susie = cfg.raw_dir("cis_eQTL_SuSiE" if qtl_type == "e" else "cis_sQTL_SuSiE") / (
         f"topchef_{chrom}_MaxPC70.SuSiE_summary.parquet" if qtl_type == "e" else f"topchefSplice_{chrom}_MaxPC25.SuSiE_summary.parquet")
@@ -91,29 +110,30 @@ def _one(args) -> tuple[str, str, int, int]:
     con.execute(f"""CREATE TABLE s AS
         SELECT phenotype_id, position, A1, A2, max(pip)::FLOAT AS pip, arg_max(cs_id, pip)::TINYINT AS cs_id
         FROM '{susie}' GROUP BY 1, 2, 3, 4""")
-    con.execute(f"CREATE TABLE g AS SELECT gene_id, tss FROM '{ann}' WHERE chr = '{chrom}'")
+    # tested genes carry their partition bin (TSS rank / nominal_bin_genes) in genes.parquet
+    con.execute(f"CREATE TABLE g AS SELECT gene_id, tss, bin FROM '{genes}' WHERE chr = '{chrom}' AND bin IS NOT NULL")
     if qtl_type == "e":
         con.execute(f"CREATE VIEW n AS SELECT *, phenotype_id AS gene_id FROM '{src}'")
-        select_extra, order = "", "g.tss, n.gene_id, n.position"
+        select_extra, order = "", "g.bin, g.tss, n.gene_id, n.position"
     elif cfg["sqtl_nominal"] == "significant":
         sp = cfg.derived / "splice_phenotypes.parquet"
         con.execute(f"""CREATE VIEW n AS SELECT r.*, {SPLICE_PARSE.replace('phenotype_id', 'r.phenotype_id')}
             FROM '{src}' r SEMI JOIN (SELECT phenotype_id FROM '{sp}' WHERE is_sqtl) k USING (phenotype_id)""")
-        select_extra, order = "n.phenotype_id,", "g.tss, n.gene_id, n.phenotype_id, n.position"
+        select_extra, order = "n.phenotype_id,", "g.bin, g.tss, n.gene_id, n.phenotype_id, n.position"
     else:
         con.execute(f"CREATE VIEW n AS SELECT *, {SPLICE_PARSE} FROM '{src}'")
-        select_extra, order = "n.phenotype_id,", "g.tss, n.gene_id, n.phenotype_id, n.position"
-    tmp = out.with_suffix(".sorted.tmp.parquet")
-    out.parent.mkdir(parents=True, exist_ok=True)
+        select_extra, order = "n.phenotype_id,", "g.bin, g.tss, n.gene_id, n.phenotype_id, n.position"
+    out.mkdir(parents=True, exist_ok=True)
+    tmp = out / "sorted.tmp.parquet"
     con.execute(f"""
         COPY (
-            SELECT {select_extra} n.gene_id, n.position::INTEGER AS position, n.A1, n.A2, v.rs_number,
+            SELECT g.bin, {select_extra} n.gene_id, n.position::INTEGER AS position, n.A1, n.A2, v.rs_number,
                    n.start_distance::INTEGER AS tss_distance, n.af::FLOAT AS af,
                    n.ma_samples::SMALLINT AS ma_samples, n.ma_count::SMALLINT AS ma_count,
                    n.pval_nominal, n.slope::FLOAT AS slope, n.slope_se::FLOAT AS slope_se,
                    s.pip, s.cs_id
             FROM n
-            LEFT JOIN g ON g.gene_id = n.gene_id
+            JOIN g ON g.gene_id = n.gene_id
             LEFT JOIN v ON v.position = n.position AND v.A1 = n.A1 AND v.A2 = n.A2
             LEFT JOIN s ON s.phenotype_id = n.phenotype_id AND s.position = n.position AND s.A1 = n.A1 AND s.A2 = n.A2
             ORDER BY {order}
@@ -126,9 +146,9 @@ def _one(args) -> tuple[str, str, int, int]:
         raise RuntimeError(f"{src}: row count changed {raw_n} -> {tmp_n} (join duplicated rows)")
     con.close()
     shutil.rmtree(work_tmp, ignore_errors=True)
-    groups = _regroup(tmp, out, "gene_id", STATS[qtl_type], ENCODING[qtl_type])
+    groups, files = _regroup(tmp, out, "gene_id", STATS[qtl_type], ENCODING[qtl_type])
     tmp.unlink()
-    return qtl_type, chrom, raw_n, groups
+    return qtl_type, chrom, raw_n, groups, files
 
 
 def run(cfg: Config, force: bool = False) -> None:
@@ -139,17 +159,18 @@ def run(cfg: Config, force: bool = False) -> None:
     ]:
         for c in CHROMS:
             src = cfg.raw_dir(src_dir) / pat.format(c=c)
-            out = cfg.derived / out_dir / f"chr={c}" / "data.parquet"
+            out = cfg.derived / out_dir / f"chr={c}"          # bin=<n>/data.parquet files go inside
             if not src.exists():
                 log(f"nominal: missing raw file {src.name}, skipping")
                 continue
-            if not force and out.exists() and out.stat().st_mtime > src.stat().st_mtime:
+            done = list(out.glob("bin=*/data.parquet"))
+            if not force and done and min(p.stat().st_mtime for p in done) > src.stat().st_mtime:
                 continue
             jobs.append((qtl_type, c, str(src), str(out)))
     jobs.sort(key=lambda j: -Path(j[2]).stat().st_size)  # biggest first
-    log(f"nominal: {len(jobs)} files to build with {cfg['workers']} workers")
+    log(f"nominal: {len(jobs)} chromosomes to build with {cfg['workers']} workers")
     with ProcessPoolExecutor(max_workers=cfg["workers"]) as ex:
         futs = {ex.submit(_one, j): j for j in jobs}
         for f in as_completed(futs):
-            qtl_type, c, n, groups = f.result()
-            log(f"nominal: {qtl_type} {c}: {n:,} rows in {groups} row groups")
+            qtl_type, c, n, groups, files = f.result()
+            log(f"nominal: {qtl_type} {c}: {n:,} rows in {groups} row groups across {files} bin files")

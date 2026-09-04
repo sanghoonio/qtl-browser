@@ -1,5 +1,5 @@
 import { useEffect, useState, type ReactNode } from 'react'
-import { Link, useParams, useSearchParams } from 'react-router'
+import { Link, useNavigate, useParams, useSearchParams } from 'react-router'
 import ExternalLink from '@/components/ExternalLink'
 import { Page } from '@/components/page'
 import { PageHeader } from '@/components/page-header'
@@ -8,34 +8,37 @@ import { KvTable } from '@/components/kv-table'
 import { Tooltip } from '@/components/tooltip'
 import { Segmented } from '@/components/segmented'
 import { DetailSkeleton, Empty, TableSkeleton, TabSkeleton } from '@/components/states'
+import { Pager } from '@/components/pager'
 import CredibleSetTable from '@/components/CredibleSetTable'
 import CisTable from '@/components/CisTable'
 import LocusPlot, { LocusLegend } from '@/components/LocusPlot'
 import { COLOC_EQTL_GENES, COLOC_SQTL_GENES } from '@/lib/coloc'
 import { ensemblGene, gtexGene, ucsc } from '@/lib/links'
 import { fmtBp, fmtInt, fmtNum, fmtP, fmtPhenotype, fmtSlopeSE } from '@/lib/format'
-import { credibleSets, geneRow, resolveGene, splicePhenotypes, transPairs,
-  type CredibleSetRow, type Gene as GeneRow, type SearchHit, type SplicePhenotype, type TransRow } from '@/lib/queries'
+import { geneDetail, resolveGene, transPairs, type GeneDetail,
+  type CredibleSetRow, type Gene as GeneRow, type SearchHit, type TransRow } from '@/lib/queries'
 
 type Tab = 'eqtl' | 'sqtl' | 'trans'
 
 export default function Gene() {
   const { id = '' } = useParams()
   const [params, setParams] = useSearchParams()
-  const tab = (params.get('tab') as Tab) || 'eqtl'
   const [hit, setHit] = useState<SearchHit | null | undefined>(undefined)
-  const [gene, setGene] = useState<GeneRow | null>(null)
+  // a gene tested for sQTL but not eQTL opens on its sQTL tab
+  const tab: Tab = (params.get('tab') as Tab | null) ?? (hit && !hit.tested && hit.bin != null ? 'sqtl' : 'eqtl')
+  const [detail, setDetail] = useState<GeneDetail | null>(null)
 
   useEffect(() => {
-    setHit(undefined); setGene(null)
-    resolveGene(id).then(h => { setHit(h); if (h) geneRow(h).then(setGene) })
+    setHit(undefined); setDetail(null)
+    resolveGene(id).then(h => { setHit(h); if (h?.bin != null) geneDetail(h).then(setDetail) })
   }, [id])
 
-  if (hit === undefined) return <Page><DetailSkeleton plot /></Page>
+  // the page-level skeleton follows the tab in the URL: only the eQTL tab opens with a locus plot
+  if (hit === undefined) return <Page><DetailSkeleton plot={tab === 'eqtl'} kvRows={tab === 'eqtl' ? 9 : 4} /></Page>
   if (hit === null) return <Page><Empty label={`No gene matches “${id}”.`} /></Page>
 
   const sym = hit.symbol ?? hit.gene_id
-  const g = gene
+  const g = detail?.gene ?? null
   const tabs = [
     { value: 'eqtl' as Tab, label: 'eQTL' },
     { value: 'sqtl' as Tab, label: `sQTL${hit.n_sqtl_sig ? ` (${hit.n_sqtl_sig})` : ''}` },
@@ -52,16 +55,17 @@ export default function Gene() {
           {hit.n_sqtl_sig > 0 && <Chip cls="badge-secondary" tip="Introns with a significant cis-sQTL (permutation p < 0.05)">{hit.n_sqtl_sig} sQTL intron{hit.n_sqtl_sig > 1 ? 's' : ''}</Chip>}
           {COLOC_EQTL_GENES.includes(sym) && <Chip cls="badge-accent" tip="eQTL colocalizes with the Jurgens et al. 2024 DCM GWAS (coloc PP.H4 > 0.8)">DCM coloc · eQTL</Chip>}
           {COLOC_SQTL_GENES.includes(sym) && <Chip cls="badge-accent badge-outline" tip="sQTL colocalizes with the Jurgens et al. 2024 DCM GWAS (coloc PP.H4 > 0.8)">DCM coloc · sQTL</Chip>}
-          {!hit.tested && <Chip cls="badge-ghost" tip="Filtered out before QTL mapping (expression or mappability)">not tested</Chip>}
+          {hit.bin == null && <Chip cls="badge-ghost" tip="Filtered out before QTL mapping (expression or mappability)">not tested</Chip>}
+          {hit.bin != null && !hit.tested && <Chip cls="badge-ghost" tip="Tested for splicing QTL only; filtered out of the expression analysis">no eQTL test</Chip>}
         </span>}
-        actions={hit.tested ? <Segmented nav value={tab} onChange={t => setParams({ tab: t })} options={tabs} /> : undefined}
+        actions={hit.bin != null ? <Segmented nav value={tab} onChange={t => setParams({ tab: t })} options={tabs} /> : undefined}
       />
-      {!hit.tested ? (
+      {hit.bin == null ? (
         <Empty label={`${sym} is annotated in GENCODE v34 but was not tested for QTL (filtered out by expression or mappability).`} />
       ) : (
         <>
-          {tab === 'eqtl' && (g ? <EqtlTab hit={hit} g={g} /> : <TabSkeleton plot chr={hit.chr} />)}
-          {tab === 'sqtl' && (g ? <><GeneTable g={g} /><SqtlTab hit={hit} /></> : <TabSkeleton kvRows={4} />)}
+          {tab === 'eqtl' && (detail ? <EqtlTab hit={hit} d={detail} /> : <TabSkeleton plot chr={hit.chr} />)}
+          {tab === 'sqtl' && (detail ? <><GeneTable g={detail.gene} /><SqtlTab hit={hit} d={detail} /></> : <TabSkeleton kvRows={4} />)}
           {tab === 'trans' && (g ? <><GeneTable g={g} /><TransTab hit={hit} /></> : <TabSkeleton kvRows={4} />)}
         </>
       )}
@@ -92,13 +96,15 @@ function GeneTable({ g }: { g: GeneRow }) {
   return <div className="mb-8 grid items-start gap-4 md:grid-cols-2"><KvTable rows={geneRows(g)} /></div>
 }
 
-function EqtlTab({ hit, g }: { hit: SearchHit; g: GeneRow }) {
+function EqtlTab({ hit, d }: { hit: SearchHit; d: GeneDetail }) {
+  const g = d.gene
   const [cs, setCs] = useState<CredibleSetRow[] | null>(null)
   const [nVar, setNVar] = useState<number | null>(null)
   const [legend, setLegend] = useState<string[] | null>(null)
   const [exportMenu, setExportMenu] = useState<ReactNode>(null)
-  useEffect(() => { setCs(null); setNVar(null); credibleSets(hit, 'e').then(setCs) }, [hit])
+  useEffect(() => { setCs(null); setNVar(null) }, [hit])
   const sym = hit.symbol ?? hit.gene_id
+  if (!g.tested) return <><GeneTable g={g} /><Empty label={`${sym} was not tested for cis-eQTL (filtered out by expression or mappability); see the sQTL tab.`} /></>
   return (
     <div className="space-y-8">
       <div className="grid items-start gap-4 md:grid-cols-2">
@@ -123,7 +129,7 @@ function EqtlTab({ hit, g }: { hit: SearchHit; g: GeneRow }) {
       <SectionPanel title="Locus"
         description={<span className="inline-flex items-center gap-3 tabular-nums"><span>{g.chr}:{fmtInt(g.tss - 1_000_000)}–{fmtInt(g.tss + 1_000_000)}{nVar != null && ` · ${fmtInt(nVar)} variants`}</span>{exportMenu}</span>}
         action={legend && <LocusLegend sets={legend} />}>
-        <LocusPlot spec={{ hit, qtlType: 'e', tss: g.tss }} onCount={setNVar} onLegend={setLegend} onExportMenu={setExportMenu} />
+        <LocusPlot spec={{ hit, qtlType: 'e', tss: g.tss, exons: d.exons }} onCount={setNVar} onLegend={setLegend} onExportMenu={setExportMenu} onCredibleSets={setCs} />
       </SectionPanel>
       <SectionPanel title="SuSiE 95% credible sets">
         {cs === null ? <TableSkeleton columns={[{ w: 'w-4' }, { w: 'w-12' }, { w: 'w-8', align: 'right' }, { w: 'w-24' }, { w: 'w-10', align: 'right' }, { w: 'w-10', align: 'right' }, { w: 'w-16', align: 'right' }]} rows={2} /> : <CredibleSetTable rows={cs} />}
@@ -135,19 +141,16 @@ function EqtlTab({ hit, g }: { hit: SearchHit; g: GeneRow }) {
   )
 }
 
-function SqtlTab({ hit }: { hit: SearchHit }) {
-  const [phens, setPhens] = useState<SplicePhenotype[] | null>(null)
-  const [cs, setCs] = useState<CredibleSetRow[]>([])
-  const [selected, setSelected] = useState<string | null>(null)
+function SqtlTab({ hit, d }: { hit: SearchHit; d: GeneDetail }) {
+  const phens = d.splice
+  const [cs, setCs] = useState<CredibleSetRow[] | null>(null)
+  const [selected, setSelected] = useState<string | null>(() => phens.find(x => x.is_sqtl)?.phenotype_id ?? null)
   const [nVar, setNVar] = useState<number | null>(null)
   const [legend, setLegend] = useState<string[] | null>(null)
   const [exportMenu, setExportMenu] = useState<ReactNode>(null)
   useEffect(() => {
-    setPhens(null); setSelected(null); setNVar(null)
-    splicePhenotypes(hit).then(p => { setPhens(p); setSelected(p.find(x => x.is_sqtl)?.phenotype_id ?? null) })
-    credibleSets(hit, 's').then(setCs)
-  }, [hit])
-  if (phens === null) return <TableSkeleton columns={[{ w: 'w-20' }, { w: 'w-40' }, { w: 'w-20' }, { w: 'w-20', align: 'right' }, { w: 'w-14', align: 'right' }, { w: 'w-6', align: 'right' }]} rows={5} />
+    setSelected(phens.find(x => x.is_sqtl)?.phenotype_id ?? null); setNVar(null); setCs(null)
+  }, [hit, phens])
   if (!phens.length) return <Empty label="No splicing phenotypes were tested for this gene." />
   const visible = phens.filter(p => p.is_sqtl)
   const sel = phens.find(p => p.phenotype_id === selected) ?? null
@@ -182,9 +185,11 @@ function SqtlTab({ hit }: { hit: SearchHit }) {
           <SectionPanel title="Locus"
             description={<span className="inline-flex items-center gap-3 tabular-nums"><span>intron {fmtPhenotype(sel.phenotype_id)}{nVar != null && ` · ${fmtInt(nVar)} variants`}</span>{exportMenu}</span>}
             action={legend && <LocusLegend sets={legend} />}>
-            <LocusPlot spec={{ hit, qtlType: 's', phenotypeId: sel.phenotype_id, tss: sel.tss, intron: { start: sel.intron_start, end: sel.intron_end } }} onCount={setNVar} onLegend={setLegend} onExportMenu={setExportMenu} />
+            <LocusPlot spec={{ hit, qtlType: 's', phenotypeId: sel.phenotype_id, tss: sel.tss, exons: d.exons, intron: { start: sel.intron_start, end: sel.intron_end } }} onCount={setNVar} onLegend={setLegend} onExportMenu={setExportMenu} onCredibleSets={setCs} />
           </SectionPanel>
-          <SectionPanel title="SuSiE 95% credible sets"><CredibleSetTable rows={cs.filter(c => c.phenotype_id === sel.phenotype_id)} /></SectionPanel>
+          <SectionPanel title="SuSiE 95% credible sets">
+            {cs === null ? <TableSkeleton columns={[{ w: 'w-4' }, { w: 'w-12' }, { w: 'w-8', align: 'right' }, { w: 'w-24' }, { w: 'w-10', align: 'right' }, { w: 'w-10', align: 'right' }, { w: 'w-16', align: 'right' }]} rows={2} /> : <CredibleSetTable rows={cs} />}
+          </SectionPanel>
           <SectionPanel title="All variants in the cis window">
             <CisTable query={{ hit, qtlType: 's', phenotypeId: sel.phenotype_id }} fileStem={`${sym}_${sel.cluster_id}_${sel.intron_start}_${sel.intron_end}_cis_sqtl`} />
           </SectionPanel>
@@ -195,22 +200,31 @@ function SqtlTab({ hit }: { hit: SearchHit }) {
 }
 
 function TransTab({ hit }: { hit: SearchHit }) {
+  const navigate = useNavigate()
   const [t, setT] = useState<TransRow[] | null>(null)
-  useEffect(() => { setT(null); transPairs(hit).then(setT) }, [hit])
+  const [offset, setOffset] = useState(0)
+  const [pageSize, setPageSize] = useState(10)
+  useEffect(() => {
+    let alive = true
+    setT(null); setOffset(0)
+    transPairs(hit).then(rows => { if (alive) setT(rows) })
+    return () => { alive = false }
+  }, [hit])
   if (t === null) return <TableSkeleton columns={[{ w: 'w-10' }, { w: 'w-40' }, { w: 'w-24' }, { w: 'w-20' }, { w: 'w-10', align: 'right' }, { w: 'w-14', align: 'right' }, { w: 'w-20', align: 'right' }, { w: 'w-10', align: 'right' }]} />
   if (!t.length) return <Empty label="No significant trans associations for this gene." />
   return (
-    <SectionPanel title="trans associations" description="Variants outside the cis window associated with this gene's expression (e) or splicing (s); up to 2,000 by p-value.">
+    <SectionPanel title="trans associations"
+      description="Variants outside the cis window associated with this gene's expression (e) or splicing (s); up to 2,000 by p-value. Click a row to open the variant.">
       <div className="overflow-x-auto rounded-lg border border-base-300">
         <table className="table table-sm">
           <thead><tr><th>Type</th><th>Phenotype</th><th>Variant</th><th>rsID</th><th className="text-right">AF</th><th className="text-right">p</th><th className="text-right">Beta ± SE</th><th className="text-right">r²</th></tr></thead>
           <tbody>
-            {t.map((r, i) => (
-              <tr key={i} className="hover:bg-base-200">
+            {t.slice(offset, offset + pageSize).map((r, i) => (
+              <tr key={i} className="cursor-pointer transition-colors hover:bg-base-200/60" onClick={() => navigate(`/variant/${r.rsid ?? `${r.variant_chr}:${r.position}`}`)}>
                 <td><span className={`badge badge-xs ${r.qtl_type === 'e' ? 'badge-primary' : 'badge-secondary'}`}>{r.qtl_type === 'e' ? 'eQTL' : 'sQTL'}</span></td>
                 <td className="tabular-nums text-base-content/60">{r.qtl_type === 'e' ? 'expression' : fmtPhenotype(r.phenotype_id)}</td>
-                <td className="tabular-nums"><Link className="link-quiet" to={`/variant/${r.variant_chr}:${r.position}`}>{r.variant_chr}:{fmtInt(r.position)}</Link></td>
-                <td>{r.rsid ? <Link className="link-quiet" to={`/variant/${r.rsid}`}>{r.rsid}</Link> : ''}</td>
+                <td className="tabular-nums">{r.variant_chr}:{fmtInt(r.position)}</td>
+                <td>{r.rsid ?? ''}</td>
                 <td className="text-right tabular-nums text-base-content/60">{fmtNum(r.af)}</td>
                 <td className="text-right tabular-nums">{fmtP(r.pval)}</td>
                 <td className="text-right tabular-nums">{fmtSlopeSE(r.beta, r.beta_se)}</td>
@@ -220,6 +234,7 @@ function TransTab({ hit }: { hit: SearchHit }) {
           </tbody>
         </table>
       </div>
+      <Pager total={t.length} offset={offset} pageSize={pageSize} onPage={setOffset} onPageSize={n => { setPageSize(n); setOffset(0) }} />
     </SectionPanel>
   )
 }

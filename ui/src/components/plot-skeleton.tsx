@@ -22,9 +22,9 @@ function Frame({ height, xTitle, yTitle, children }: { height: number; xTitle: s
       <div className="skeleton absolute rounded-none opacity-30" style={{ left: ML + 1, right: MR, top: mt, bottom: mb + 1 }} />
       <div className={`${AXIS} border-l`} style={{ left: ML, top: mt, bottom: mb }} />
       <div className={`${AXIS} border-t`} style={{ left: ML, right: MR, bottom: mb }} />
-      <span className="absolute left-0 top-1/2 origin-center -translate-y-1/2 -rotate-90 whitespace-nowrap text-[10px] text-base-content/40"
-        style={{ left: -22 }}>{yTitle}</span>
-      <span className="absolute bottom-0 whitespace-nowrap text-[10px] text-base-content/40" style={{ left: ML, right: MR, textAlign: 'center' }}>{xTitle}</span>
+      {/* axis titles where Observable Plot puts them: y at the top-left corner, x at the bottom-right */}
+      <span className="absolute left-0 top-0 whitespace-nowrap text-[10px] leading-none text-base-content/50">↑ {yTitle}</span>
+      <span className="absolute bottom-0 right-0 whitespace-nowrap text-[10px] leading-none text-base-content/50">{xTitle} →</span>
       {children}
     </div>
   )

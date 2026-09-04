@@ -1,11 +1,12 @@
 import { useEffect, useRef, useState } from 'react'
 import * as vg from '@uwdata/vgplot'
-import { collapsedExons, genesInWindow, type Exon, type WindowGene } from '@/lib/queries'
+import { genesInWindow, type Exon, type WindowGene } from '@/lib/queries'
 
 export interface TrackSpec {
   chr: string
   geneId: string
   domain: [number, number]
+  exons: Exon[]                              // collapsed model of the gene of interest
   intron?: { start: number; end: number }   // the selected sQTL intron
 }
 
@@ -41,8 +42,9 @@ export default function GeneTrack({ spec, width, marginLeft, dark }: { spec: Tra
   useEffect(() => {
     let alive = true
     setData(null); setError(null)
-    Promise.all([genesInWindow(spec.chr, spec.domain[0], spec.domain[1]), collapsedExons(spec.chr, spec.geneId)])
-      .then(([genes, exons]) => { if (alive) setData({ genes, exons }) })
+    // neighbours come from the in-memory index; the gene's own exons arrive with gene_detail
+    genesInWindow(spec.chr, spec.domain[0], spec.domain[1])
+      .then(genes => { if (alive) setData({ genes, exons: spec.exons }) })
       .catch((e: Error) => { console.error(e); if (alive) setError(`gene track query failed: ${e.message}`) })
     return () => { alive = false }
   }, [key]) // eslint-disable-line react-hooks/exhaustive-deps

@@ -22,14 +22,38 @@ async function boot() {
   const db = new duckdb.AsyncDuckDB(logger, worker)
   await db.instantiate(bundle.mainModule, bundle.pthreadWorker)
   URL.revokeObjectURL(workerUrl)
+  // DuckDB-WASM defaults to downloading whole HTTP files (forceFullHTTPReads) unless told
+  // otherwise; this is what makes every parquet read a Range request (HTTP 206) against R2
+  await db.open({ filesystem: { forceFullHTTPReads: false, allowFullHTTPReads: true, reliableHeadRequests: true } })
+  // every table file is registered under its relative path: DuckDB then opens it by name and
+  // skips the HEAD it would otherwise send to resolve a raw URL on every query
+  for (const f of TABLE_FILES) await db.registerFileURL(f, `${DATA_BASE}/${f}`, duckdb.DuckDBDataProtocol.HTTP, false)
   const con = await db.connect()
   // footers are fetched once per file per session
   await con.query(`SET parquet_metadata_cache = true`).catch(() => {})
-  await con.query(
-    `CREATE TABLE search_index AS SELECT * FROM read_parquet('${DATA_BASE}/search_index.parquet')`,
-  )
+  await con.query(`CREATE TABLE search_index AS SELECT * FROM read_parquet('search_index.parquet')`)
+  // the per-gene tables are partitioned by chromosome and TSS bin; the index knows every bin
+  const bins = (await con.query(`SELECT DISTINCT chr, bin FROM search_index WHERE bin IS NOT NULL`)).toArray()
+  for (const r of bins) {
+    for (const t of BINNED_TABLES) {
+      const f = `${t}/chr=${r.chr}/bin=${r.bin}/data.parquet`
+      await db.registerFileURL(f, `${DATA_BASE}/${f}`, duckdb.DuckDBDataProtocol.HTTP, false)
+    }
+  }
   return { db, con }
 }
+
+/** The data contract with the pipeline: single-file tables, the chromosome-partitioned ones
+ *  (one file per chromosome), and the chromosome + bin ones (registered once the index is
+ *  loaded). Exact paths throughout, since there is no directory listing over HTTP. */
+const CHROMS = [...Array.from({ length: 22 }, (_, i) => `chr${i + 1}`), 'chrX']
+const BINNED_TABLES = ['gene_detail', 'cis_eqtl_nominal', 'cis_sqtl_nominal']
+const TABLE_FILES: string[] = [
+  'search_index.parquet', 'genes.parquet', 'splice_phenotypes.parquet', 'credible_sets.parquet', 'coloc.parquet',
+  'gwas_dcm_bins.parquet', 'gene_annotation.parquet', 'exons.parquet', 'variants_by_rsid.parquet',
+  ...['gwas_dcm', 'variants_by_position', 'trans_pairs', 'trans_by_variant']
+    .flatMap(t => CHROMS.map(c => `${t}/chr=${c}/data.parquet`)),
+]
 
 export function getDB() {
   if (!dbPromise) dbPromise = boot()
@@ -60,7 +84,8 @@ export function lit(s: string): string {
 }
 
 export function parquet(path: string): string {
-  return `read_parquet('${DATA_BASE}/${path}', hive_partitioning=false)`
+  // by registered name, not URL (see boot)
+  return `read_parquet('${path}', hive_partitioning=false)`
 }
 
 // ---- Mosaic ---------------------------------------------------------------------------------

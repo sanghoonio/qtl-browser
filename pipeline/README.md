@@ -26,7 +26,8 @@ live in `config.yaml`. Nothing is hard-coded in the steps.
 | variants_rsid | `steps_variants` | dbSNP b157 VCF via `bcftools query -T` on those positions | `variants_by_position/chr=*/`, `variants_by_rsid.parquet`, with an exact / position / none match flag |
 | permutation_tables | `steps_tables` | cis permutation files, SuSiE, trans, annotation | `genes.parquet`, `splice_phenotypes.parquet` (sorted chr, tss; stats for range reads), `search_index.parquet` (the one table the browser loads whole) |
 | credible_sets | `steps_tables` | SuSiE files | `credible_sets.parquet` |
-| nominal | `steps_nominal` | cis nominal files, one process per chromosome | `cis_eqtl_nominal/chr=*/`, `cis_sqtl_nominal/chr=*/`: one row group per gene, delta/byte-stream-split encodings, rsIDs as `rs_number`. With `sqtl_nominal: significant` the sQTL side keeps only introns flagged `is_sqtl` |
+| nominal | `steps_nominal` | cis nominal files, one process per chromosome | `cis_eqtl_nominal/chr=*/bin=*/`, `cis_sqtl_nominal/chr=*/bin=*/`: one file per `nominal_bin_genes` tested genes (by TSS rank, the `bin` column of `genes`), one row group per gene, delta/byte-stream-split encodings, rsIDs as `rs_number`. With `sqtl_nominal: significant` the sQTL side keeps only introns flagged `is_sqtl` |
+| gene_detail | `steps_tables` | genes, exons, splice_phenotypes | `gene_detail/chr=*/bin=*/`: one row per tested gene with the genes row, the collapsed exon model (`exons` list) and every tested intron (`splice` list); one row group per gene |
 | trans | `steps_tables` | trans files | `trans_pairs/chr=<gene chr>/` sorted by gene, and `trans_by_variant/chr=<variant chr>/` sorted by position |
 | coloc_stub | `steps_tables` | nothing yet | empty `coloc.parquet` with the intended schema |
 | gwas_bins | `steps_gwas` | the Jurgens 2024 file named by `dcm_gwas` in the config (biobanks-only; the CVDKP zip has five) | `gwas_dcm_bins.parquet`: strongest p per 5 Mb window |
@@ -42,8 +43,10 @@ and the rsID exact-match rate.
 
 ## Layout rules the browser depends on
 
-- Big tables are hive-partitioned by chromosome; the app always names the exact partition file,
-  since there is no directory listing over HTTP.
+- Big tables are hive-partitioned by chromosome, and the per-gene ones (nominal, gene_detail)
+  by chromosome and `bin`, so a footer covers about 100 genes instead of a chromosome. The app
+  always names the exact partition file, since there is no directory listing over HTTP; it
+  takes `bin` from the search index.
 - Row-group statistics are written only for the columns queries filter on. A per-gene read
   needs `gene_id` (nominal, trans, exons) or `chr` + `tss` (genes, splice phenotypes, credible
   sets: the app knows both from the search index). Position lookups need `position`.

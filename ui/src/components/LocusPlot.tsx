@@ -5,6 +5,7 @@ import { dropTable, getCoordinator, getDB, lit, materializeLocus, parquet } from
 import { CS_COLORS, CS_DOMAIN, CS_SWATCH_CLIP, CS_SYMBOLS, isDark } from '@/lib/plot-theme'
 import type { SearchHit } from '@/lib/queries'
 import { CompareSkeleton, LocusSkeleton } from '@/components/plot-skeleton'
+import { nominalFile, type CredibleSetRow, type Exon } from '@/lib/queries'
 import GeneTrack from '@/components/GeneTrack'
 import LocusCompare from '@/components/LocusCompare'
 import { clearPlotHover, onPlotPointerMove } from '@/lib/plot-hover'
@@ -15,6 +16,7 @@ export interface LocusSpec {
   qtlType: 'e' | 's'
   phenotypeId?: string
   tss: number
+  exons: Exon[]                              // collapsed model of the gene, from gene_detail
   intron?: { start: number; end: number }
 }
 const MARGIN_LEFT = 48
@@ -43,7 +45,6 @@ export const SURFACE = { light: '#ffffff', dark: '#1b1a1a' }
  *  either orientation, GWAS beta re-signed to the QTL effect allele A1). Ordered so
  *  credible-set variants are drawn last (on top). */
 function locusSQL(spec: LocusSpec): string {
-  const file = spec.qtlType === 'e' ? 'cis_eqtl_nominal' : 'cis_sqtl_nominal'
   const where = [`q.gene_id = ${lit(spec.hit.gene_id)}`, spec.phenotypeId ? `q.phenotype_id = ${lit(spec.phenotypeId)}` : null]
     .filter(Boolean).join(' AND ')
   const lo = spec.tss - 1_000_000, hi = spec.tss + 1_000_000
@@ -52,7 +53,7 @@ function locusSQL(spec: LocusSpec): string {
            -- p underflows to 0 for a few extreme variants: place them just above the largest finite value
            coalesce(-log10(nullif(q.pval_nominal, 0)), max(-log10(nullif(q.pval_nominal, 0))) OVER () * 1.05) AS nlp,
            q.pval_nominal = 0 AS clipped,
-           q.pval_nominal, q.slope, q.slope_se, q.af, q.pip, q.cs_id, q.rs_number,
+           q.pval_nominal, q.slope, q.slope_se, q.af, q.pip, q.cs_id, q.rs_number, q.A1, q.A2,
            coalesce(q.cs_id::VARCHAR, 'none') AS cs,
            g.p AS gwas_p, -log10(g.p) AS gwas_nlp,
            CASE WHEN g.ea = q.A1 THEN g.beta ELSE -g.beta END AS gwas_beta,
@@ -62,7 +63,7 @@ function locusSQL(spec: LocusSpec): string {
              || chr(10) || 'AF ' || format('{:.3f}', q.af)
              || CASE WHEN q.pip IS NULL THEN '' ELSE chr(10) || 'PIP ' || format('{:.3f}', q.pip) || ' (set ' || q.cs_id || ')' END
              || CASE WHEN g.p IS NULL THEN '' ELSE chr(10) || 'DCM GWAS p = ' || format('{:.2e}', g.p) || ', beta ' || format('{:+.3f}', CASE WHEN g.ea = q.A1 THEN g.beta ELSE -g.beta END) || ' per A1' END AS label
-    FROM ${parquet(`${file}/chr=${spec.hit.chr}/data.parquet`)} q
+    FROM ${parquet(nominalFile(spec.hit, spec.qtlType))} q
     LEFT JOIN (SELECT * FROM ${parquet(`gwas_dcm/chr=${spec.hit.chr}/data.parquet`)} WHERE position BETWEEN ${lo} AND ${hi}) g
       ON g.position = q.position AND ((g.ea = q.A1 AND g.nea = q.A2) OR (g.ea = q.A2 AND g.nea = q.A1))
     WHERE ${where}
@@ -74,12 +75,14 @@ function locusSQL(spec: LocusSpec): string {
 
 /** -log10 p against position for one cis window. Dots colored by credible-set membership,
  *  PIP as opacity, a TSS rule, and Observable Plot's nearest-point tip. */
-export default function LocusPlot({ spec, onCount, onLegend, onExportMenu }: {
+export default function LocusPlot({ spec, onCount, onLegend, onExportMenu, onCredibleSets }: {
   spec: LocusSpec
   onCount?: (n: number) => void
   onLegend?: (sets: string[] | null) => void
   /** Receives the export menu once the plots are drawn (null while loading) so the parent can place it. */
   onExportMenu?: (menu: ReactNode | null) => void
+  /** credible-set members of this locus, read from the materialized window (no extra fetch) */
+  onCredibleSets?: (rows: CredibleSetRow[] | null) => void
 }) {
   const host = useRef<HTMLDivElement>(null)
   const [state, setState] = useState<'loading' | 'ready' | 'error'>('loading')
@@ -125,6 +128,7 @@ export default function LocusPlot({ spec, onCount, onLegend, onExportMenu }: {
     setTableName(null)
     setLink(null)
     onLegend?.(null)
+    onCredibleSets?.(null)
     ;(async () => {
       try {
         await getCoordinator()
@@ -136,6 +140,19 @@ export default function LocusPlot({ spec, onCount, onLegend, onExportMenu }: {
         if (!alive) return
         onCount?.(Number(agg.n))
         onLegend?.(sets)
+        if (onCredibleSets) {
+          // the window already holds every variant's set and PIP: the credible-set table comes
+          // from it instead of a second range read of credible_sets.parquet
+          const cs = (await con.query(`
+            SELECT position, A1, A2, CASE WHEN rs_number IS NULL THEN NULL ELSE 'rs' || rs_number END AS rsid, af, cs_id, pip
+            FROM ${table} WHERE cs_id IS NOT NULL ORDER BY cs_id, pip DESC`)).toArray()
+          if (!alive) return
+          onCredibleSets(cs.map(r => {
+            const o: Record<string, unknown> = {}
+            for (const [k, v] of Object.entries(r.toJSON())) o[k] = typeof v === 'bigint' ? Number(v) : v
+            return { ...o, qtl_type: spec.qtlType, phenotype_id: spec.phenotypeId ?? spec.hit.gene_id, chr: spec.hit.chr } as CredibleSetRow
+          }))
+        }
         // one explicit y domain shared with the LocusCompare panel so the two y axes coincide
         setYMax(Math.max(1, Number(agg.ymax)) * 1.04)
         // empty: true → no hovered variant means the highlight layers draw nothing (an empty
@@ -208,7 +225,7 @@ export default function LocusPlot({ spec, onCount, onLegend, onExportMenu }: {
         <div ref={host} className={`plot-host ${state === 'ready' ? '' : 'invisible'}`}
           onPointerMove={onPlotPointerMove} onPointerLeave={clearPlotHover} />
         {state === 'ready' && readyFor === key && width > 0 && (
-          <GeneTrack spec={{ chr: spec.hit.chr, geneId: spec.hit.gene_id, domain: [spec.tss - 1_000_000, spec.tss + 1_000_000], intron: spec.intron }}
+          <GeneTrack spec={{ chr: spec.hit.chr, geneId: spec.hit.gene_id, domain: [spec.tss - 1_000_000, spec.tss + 1_000_000], exons: spec.exons, intron: spec.intron }}
             width={width} marginLeft={MARGIN_LEFT} dark={dark} />
         )}
       </div>

@@ -21,9 +21,13 @@ workers: 3
 duckdb_memory_limit: 6GB
 duckdb_threads: 4
 
+# tested genes per nominal / gene_detail partition file: bin = rank of the gene's TSS within its
+# chromosome, integer-divided by this; stored in genes and search_index (plan 2026-09-04-gene-bins)
+nominal_bin_genes: 100
+
 row_group_sizes:
-  trans: 20000     # a gene's trans rows are one group; smaller groups mean a smaller per-gene read
-  variants: 100000
+  trans: 5000      # a gene's trans rows span 1-2 groups (~350 KB) instead of one 1.4 MB group; per-chr footers ~150 KB
+  variants: 10000  # a one-row rsID / position lookup reads ~340 KB instead of 1.8-4.4 MB; rsid footer ~550 KB (one file)
   gwas: 10000      # ~3 Mb per group, so a 2 Mb cis window reads one or two groups for LocusCompare
 
 # which introns get nominal cis-sQTL rows: `all` (10.8 GB) or `significant` (1.8 GB, the

@@ -69,7 +69,7 @@ export function TabSkeleton({ plot = false, kvRows = 9, chr }: { plot?: boolean;
 
 /** A detail page before its identity resolves: breadcrumb, title + id, a chip row, then the
  *  tab body (with the locus row on gene pages). */
-export function DetailSkeleton({ plot = false, kvRows = 9, chr }: { plot?: boolean; kvRows?: number; chr?: string }) {
+export function DetailSkeleton({ plot = false, kvRows = 9 }: { plot?: boolean; kvRows?: number }) {
   return (
     <div aria-busy="true">
       <div className="mb-8 mt-2 space-y-3">
@@ -80,7 +80,7 @@ export function DetailSkeleton({ plot = false, kvRows = 9, chr }: { plot?: boole
         </div>
         <div className="flex gap-1.5"><Bar className="h-5 w-14 rounded-full" /><Bar className="h-5 w-24 rounded-full" /></div>
       </div>
-      <TabSkeleton plot={plot} kvRows={kvRows} chr={chr} />
+      <TabSkeleton plot={plot} kvRows={kvRows} />
     </div>
   )
 }

@@ -1,11 +1,12 @@
 import { useEffect, useState } from 'react'
-import { Link, useParams } from 'react-router'
+import { Link, useNavigate, useParams } from 'react-router'
 import ExternalLink from '@/components/ExternalLink'
 import { Page } from '@/components/page'
 import { PageHeader } from '@/components/page-header'
 import { KvTable } from '@/components/kv-table'
 import { SectionPanel } from '@/components/section-panel'
 import { DetailSkeleton, Empty, TableSkeleton } from '@/components/states'
+import { Pager } from '@/components/pager'
 import { dbsnp, ucsc } from '@/lib/links'
 import { fmtBp, fmtInt, fmtNum, fmtP, fmtPhenotype, fmtSlopeSE } from '@/lib/format'
 import { cisHitsAt, credibleSetsAt, leadGenesAt, leadPhenotypesAt, transAt, variantByPosition, variantByRsid,
@@ -45,12 +46,15 @@ export default function Variant() {
 
 function VariantBody({ vars }: { vars: VariantRow[] }) {
   const v = vars[0]
+  const navigate = useNavigate()
   const [leads, setLeads] = useState<{ genes: Gene[]; phens: SplicePhenotype[]; cs: CredibleSetHit[] } | null>(null)
   const [trans, setTrans] = useState<TransRow[] | null>(null)
+  const [transOffset, setTransOffset] = useState(0)
+  const [transPageSize, setTransPageSize] = useState(10)
   const [scan, setScan] = useState<{ e: CisHit[]; s: CisHit[] } | null | 'running'>(null)
 
   useEffect(() => {
-    setLeads(null); setTrans(null); setScan(null)
+    setLeads(null); setTrans(null); setTransOffset(0); setScan(null)
     Promise.all([leadGenesAt(v.chr, v.position), leadPhenotypesAt(v.chr, v.position), credibleSetsAt(v.chr, v.position)])
       .then(([genes, phens, cs]) => setLeads({ genes, phens, cs }))
     transAt(v.chr, v.position).then(setTrans).catch(() => setTrans([]))
@@ -141,14 +145,16 @@ function VariantBody({ vars }: { vars: VariantRow[] }) {
       <SectionPanel title="trans associations" description="Genes and splice phenotypes anywhere in the genome whose expression or splicing this variant associates with, outside their cis windows.">
         {trans === null ? <TableSkeleton columns={[{ w: 'w-10' }, { w: 'w-16' }, { w: 'w-40' }, { w: 'w-20' }, { w: 'w-14', align: 'right' }, { w: 'w-20', align: 'right' }, { w: 'w-10', align: 'right' }]} rows={3} /> :
           trans.length === 0 ? <Empty label="No significant trans associations." /> : (
+          <>
             <div className="overflow-x-auto rounded-lg border border-base-300">
               <table className="table table-sm">
                 <thead><tr><th>Type</th><th>Gene</th><th>Phenotype</th><th>Gene location</th><th className="text-right">p</th><th className="text-right">Beta ± SE</th><th className="text-right">r²</th></tr></thead>
                 <tbody>
-                  {trans.map((r, i) => (
-                    <tr key={i} className="hover:bg-base-200">
+                  {trans.slice(transOffset, transOffset + transPageSize).map((r, i) => (
+                    <tr key={i} className="cursor-pointer transition-colors hover:bg-base-200/60"
+                      onClick={() => navigate(`/gene/${r.gene_id}${r.qtl_type === 's' ? '?tab=sqtl' : '?tab=trans'}`)}>
                       <td><span className={`badge badge-xs ${r.qtl_type === 'e' ? 'badge-primary' : 'badge-secondary'}`}>{r.qtl_type === 'e' ? 'eQTL' : 'sQTL'}</span></td>
-                      <td><Link className="link-quiet font-medium" to={`/gene/${r.gene_id}${r.qtl_type === 's' ? '?tab=sqtl' : ''}`}>{r.symbol ?? r.gene_id}</Link></td>
+                      <td className="font-medium">{r.symbol ?? r.gene_id}</td>
                       <td className="tabular-nums text-base-content/60">{r.qtl_type === 'e' ? 'expression' : fmtPhenotype(r.phenotype_id)}</td>
                       <td className="tabular-nums text-base-content/60">{r.gene_chr}</td>
                       <td className="text-right tabular-nums">{fmtP(r.pval)}</td>
@@ -159,6 +165,8 @@ function VariantBody({ vars }: { vars: VariantRow[] }) {
                 </tbody>
               </table>
             </div>
+            <Pager total={trans.length} offset={transOffset} pageSize={transPageSize} onPage={setTransOffset} onPageSize={n => { setTransPageSize(n); setTransOffset(0) }} />
+          </>
           )}
       </SectionPanel>
 

@@ -21,6 +21,7 @@ STEPS = [
     ("permutation_tables", steps_tables.permutation_tables),
     ("credible_sets", steps_tables.credible_sets),
     ("nominal", steps_nominal.run),
+    ("gene_detail", steps_tables.gene_detail),
     ("trans", steps_tables.trans),
     ("coloc_stub", steps_tables.coloc_stub),
     ("gwas_bins", steps_gwas.run),

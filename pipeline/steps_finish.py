@@ -15,8 +15,9 @@ TABLES = {
     "gene_annotation": "gene_annotation.parquet", "exons": "exons.parquet",
     "variants_by_rsid": "variants_by_rsid.parquet",
     "variants_by_position": "variants_by_position/*/*.parquet",
-    "cis_eqtl_nominal": "cis_eqtl_nominal/*/*.parquet",
-    "cis_sqtl_nominal": "cis_sqtl_nominal/*/*.parquet",
+    "gene_detail": "gene_detail/*/*/*.parquet",
+    "cis_eqtl_nominal": "cis_eqtl_nominal/*/*/*.parquet",
+    "cis_sqtl_nominal": "cis_sqtl_nominal/*/*/*.parquet",
     "trans_pairs": "trans_pairs/*/*.parquet",
     "trans_by_variant": "trans_by_variant/*/*.parquet",
 }
@@ -83,8 +84,8 @@ def validate(cfg: Config) -> None:
         bad = []
         for c in [f"chr{i}" for i in range(1, 23)] + ["chrX"]:
             r = cfg.raw_dir(raw_dir) / pat.format(c=c)
-            d = cfg.derived / out_dir / f"chr={c}" / "data.parquet"
-            if not (r.exists() and d.exists()):
+            d = cfg.derived / out_dir / f"chr={c}" / "bin=*" / "data.parquet"
+            if not (r.exists() and list(d.parent.parent.glob("bin=*/data.parquet"))):
                 bad.append(f"{c}:missing")
                 continue
             if qtl == "s" and sig_only:
@@ -99,7 +100,7 @@ def validate(cfg: Config) -> None:
 
     # 2. every nominal gene appears in genes as tested
     n = con.execute(f"""
-        SELECT count(*) FROM (SELECT DISTINCT gene_id FROM read_parquet('{cfg.derived}/cis_eqtl_nominal/*/*.parquet')) x
+        SELECT count(*) FROM (SELECT DISTINCT gene_id FROM read_parquet('{cfg.derived}/cis_eqtl_nominal/*/*/*.parquet')) x
         LEFT JOIN '{cfg.derived / 'genes.parquet'}' g USING (gene_id) WHERE g.gene_id IS NULL OR NOT g.tested
     """).fetchone()[0]
     check(n == 0, f"all nominal eQTL genes present and tested in genes ({n} missing)")
@@ -117,16 +118,20 @@ def validate(cfg: Config) -> None:
         got = [r[0] for r in con.execute(f"SELECT DISTINCT rsid FROM read_parquet('{cfg.derived}/variants_by_position/chr={c}/data.parquet') WHERE position = {p}").fetchall()]
         check(rs in got, f"{key} -> {rs} (got {got})")
 
-    # 5. row-group pruning on FLNC
-    flnc = cfg.derived / "cis_eqtl_nominal" / "chr=chr7" / "data.parquet"
+    # 5. row-group pruning on FLNC, in its bin file; and that every tested gene has a gene_detail row
     import pyarrow.parquet as pq
+    flnc_bin = con.execute(f"SELECT bin FROM '{cfg.derived / 'genes.parquet'}' WHERE gene_id = 'ENSG00000128591'").fetchone()[0]
+    flnc = cfg.derived / "cis_eqtl_nominal" / "chr=chr7" / f"bin={flnc_bin}" / "data.parquet"
     md = pq.read_metadata(flnc)
     hits = 0
     for i in range(md.num_row_groups):
         st = md.row_group(i).column(0).statistics
         if st and st.min <= "ENSG00000128591" <= st.max:
             hits += 1
-    check(hits == 1, f"FLNC query touches {hits} row group(s) of {md.num_row_groups} in chr7 eQTL file")
+    check(hits == 1, f"FLNC query touches {hits} row group(s) of {md.num_row_groups} in chr7 bin {flnc_bin} eQTL file ({md.serialized_size / 1e3:.0f} KB footer)")
+    n_binned = con.execute(f"SELECT count(*) FROM '{cfg.derived / 'genes.parquet'}' WHERE bin IS NOT NULL").fetchone()[0]
+    n_detail = con.execute(f"SELECT count(*) FROM read_parquet('{cfg.derived}/gene_detail/*/*/*.parquet', hive_partitioning=false)").fetchone()[0]
+    check(n_detail == n_binned, f"gene_detail has one row per binned (eQTL- or sQTL-tested) gene ({n_detail} vs {n_binned})")
 
     # 6. rsID exact rate
     tot, ex = con.execute(f"SELECT count(*), sum(match = 'exact') FROM read_parquet('{cfg.derived}/variants_by_position/*/*.parquet')").fetchone()

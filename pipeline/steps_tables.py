@@ -1,7 +1,7 @@
 """Steps 5-6, 8-9: small tables (genes, splice_phenotypes, credible_sets), trans pairs, coloc stub."""
 import pyarrow as pa
 
-from .common import CHROMS, Config, connect, log, write_parquet
+from .common import CHROMS, Config, connect, log, write_parquet, write_parquet_grouped
 
 SPLICE_PARSE = """
     split_part(phenotype_id, ':', 1)                          AS s_chr,
@@ -62,8 +62,14 @@ def permutation_tables(cfg: Config) -> None:
                p.slope, p.slope_se, p.pval_nominal, p.pval_perm, p.pval_beta, p.qval,
                CASE WHEN p.phenotype_id IS NULL THEN NULL ELSE p.{sig_col} < {thr} END AS is_egene,
                coalesce(c.n_credible_sets, 0)::INTEGER AS n_credible_sets,
-               coalesce(t.n_trans_pairs, 0)::INTEGER AS n_trans_pairs
+               coalesce(t.n_trans_pairs, 0)::INTEGER AS n_trans_pairs,
+               -- partition file of the gene's nominal rows and gene_detail row: TSS rank among
+               -- genes tested for eQTL or sQTL on the chromosome, {cfg['nominal_bin_genes']} genes per bin
+               CASE WHEN p.phenotype_id IS NULL AND sg.gene_id IS NULL THEN NULL ELSE
+                 ((row_number() OVER (PARTITION BY a.chr, p.phenotype_id IS NOT NULL OR sg.gene_id IS NOT NULL ORDER BY a.tss, a.gene_id) - 1)
+                  // {int(cfg['nominal_bin_genes'])})::INTEGER END AS bin
         FROM ann a
+        LEFT JOIN (SELECT DISTINCT gene_id FROM sperm) sg ON sg.gene_id = a.gene_id
         LEFT JOIN perm p ON p.phenotype_id = a.gene_id
         LEFT JOIN vpos v ON v.chr = p.chr AND v.position = p.position AND v.A1 = p.A1 AND v.A2 = p.A2
         LEFT JOIN ncs c ON c.phenotype_id = p.phenotype_id
@@ -76,7 +82,8 @@ def permutation_tables(cfg: Config) -> None:
     con.register("genes_out", genes)
     idx = con.execute(f"""
         SELECT g.gene_id, g.symbol, g.chr, g.tss, g.tested, g.is_egene,
-               coalesce(s.n, 0)::SMALLINT AS n_sqtl_sig
+               coalesce(s.n, 0)::SMALLINT AS n_sqtl_sig,
+               g.bin, g.start, g."end", g.strand, g.biotype
         FROM genes_out g
         LEFT JOIN (SELECT split_part(split_part(phenotype_id, ':', 5), '.', 1) AS gene_id, count(*) AS n
                    FROM sperm WHERE {sig_col} < {thr} GROUP BY 1) s USING (gene_id)
@@ -183,3 +190,41 @@ def coloc_stub(cfg: Config) -> None:
     ])
     write_parquet(schema.empty_table(), cfg.derived / "coloc.parquet", 1000)
     log("coloc: empty stub written (awaiting authors' tables)")
+
+
+def gene_detail(cfg: Config) -> None:
+    """One row per tested gene with everything the gene page needs besides the locus: the
+    genes row, the collapsed exon model as a list, and every tested intron as a list.
+    Partitioned chr=/bin= like the nominal tables, one row group per gene, so a gene page
+    reads one small footer and one row group."""
+    con = connect(cfg)
+    d = cfg.derived
+    # every gene with a bin: tested for eQTL, for sQTL, or both
+    con.execute(f"CREATE TABLE g AS SELECT * FROM '{d / 'genes.parquet'}' WHERE bin IS NOT NULL")
+    con.execute(f"""
+        CREATE TABLE ex AS
+        WITH e AS (SELECT gene_id, start, "end" FROM '{d / 'exons.parquet'}' WHERE gene_id IN (SELECT gene_id FROM g)),
+        o AS (SELECT gene_id, start, "end",
+                     max("end") OVER (PARTITION BY gene_id ORDER BY start, "end" ROWS BETWEEN UNBOUNDED PRECEDING AND 1 PRECEDING) AS prev_max
+              FROM e),
+        grp AS (SELECT gene_id, start, "end",
+                       sum(CASE WHEN prev_max IS NULL OR start > prev_max THEN 1 ELSE 0 END) OVER (PARTITION BY gene_id ORDER BY start, "end") AS k
+                FROM o),
+        m AS (SELECT gene_id, min(start)::INTEGER AS start, max("end")::INTEGER AS "end" FROM grp GROUP BY gene_id, k)
+        SELECT gene_id, list(struct_pack(start := start, "end" := "end") ORDER BY start) AS exons FROM m GROUP BY gene_id
+    """)
+    con.execute(f"""
+        CREATE TABLE spl AS
+        SELECT gene_id, list(struct_pack(*COLUMNS(* EXCLUDE (gene_id, symbol, chr, tss))) ORDER BY cluster_id, intron_start, intron_end) AS splice
+        FROM '{d / 'splice_phenotypes.parquet'}' GROUP BY gene_id
+    """)
+    con.execute("CREATE TABLE detail AS SELECT g.*, ex.exons, spl.splice FROM g LEFT JOIN ex USING (gene_id) LEFT JOIN spl USING (gene_id)")
+    bins = con.execute("SELECT DISTINCT chr, bin FROM detail ORDER BY 1, 2").fetchall()
+    n = 0
+    for chrom, b in bins:
+        t = con.execute("SELECT * FROM detail WHERE chr = ? AND bin = ? ORDER BY gene_id", [chrom, b]).fetch_arrow_table()
+        # ten genes per row group: one group per gene made a 380 KB footer for an 0.8 MB file
+        # (30 columns x 100 groups); ten per group is a 40 KB footer and an ~80 KB read
+        write_parquet(t, d / "gene_detail" / f"chr={chrom}" / f"bin={b}" / "data.parquet", 10, stats_columns=["gene_id"])
+        n += t.num_rows
+    log(f"gene_detail: {n:,} genes in {len(bins)} files -> gene_detail/chr=*/bin=*/data.parquet")

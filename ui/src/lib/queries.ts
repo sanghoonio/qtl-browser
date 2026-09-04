@@ -4,7 +4,14 @@ import { lit, one, parquet, rows, type Row } from './db'
 export interface SearchHit extends Row {
   gene_id: string; symbol: string | null; chr: string; tss: number
   tested: boolean; is_egene: boolean | null; n_sqtl_sig: number
+  /** partition file of the gene's nominal rows and gene_detail row (null when not tested) */
+  bin: number | null
+  start: number; end: number; strand: string; biotype: string
 }
+
+/** Path of the nominal cis file holding this gene: chromosome and TSS-rank bin. */
+export const nominalFile = (hit: SearchHit, qtlType: 'e' | 's') =>
+  `${qtlType === 'e' ? 'cis_eqtl_nominal' : 'cis_sqtl_nominal'}/chr=${hit.chr}/bin=${hit.bin}/data.parquet`
 
 export interface Gene extends Row {
   gene_id: string; gene_id_version: string; symbol: string | null; chr: string
@@ -55,19 +62,21 @@ export const resolveGene = (id: string) =>
   one<SearchHit>(`SELECT * FROM search_index WHERE gene_id = ${lit(id)} OR upper(symbol) = ${lit(id.toUpperCase())}
                   ORDER BY tested DESC LIMIT 1`)
 
-export const geneRow = (hit: SearchHit) =>
-  one<Gene>(`SELECT * FROM ${parquet('genes.parquet')}
-             WHERE chr = ${lit(hit.chr)} AND tss = ${hit.tss} AND gene_id = ${lit(hit.gene_id)}`)
+export interface Exon extends Row { start: number; end: number }
+export interface GeneDetail { gene: Gene; exons: Exon[]; splice: SplicePhenotype[] }
 
-export const credibleSets = (hit: SearchHit, qtlType: 'e' | 's') =>
-  rows<CredibleSetRow>(`SELECT * FROM ${parquet('credible_sets.parquet')}
-    WHERE chr = ${lit(hit.chr)} AND tss = ${hit.tss} AND gene_id = ${lit(hit.gene_id)} AND qtl_type = ${lit(qtlType)}
-    ORDER BY phenotype_id, cs_id, pip DESC`)
-
-export const splicePhenotypes = (hit: SearchHit) =>
-  rows<SplicePhenotype>(`SELECT * FROM ${parquet('splice_phenotypes.parquet')}
-    WHERE chr = ${lit(hit.chr)} AND tss = ${hit.tss} AND gene_id = ${lit(hit.gene_id)}
-    ORDER BY cluster_id, intron_start, intron_end`)
+/** Everything the gene page needs besides the locus, in one row group of one small file:
+ *  the genes row, the collapsed exon model, and every tested intron. The list columns come
+ *  back as JSON text so one read serves all three. */
+export const geneDetail = async (hit: SearchHit): Promise<GeneDetail | null> => {
+  const r = await one<Gene & { exons_json: string | null; splice_json: string | null }>(`
+    SELECT * EXCLUDE (exons, splice), to_json(exons) AS exons_json, to_json(splice) AS splice_json
+    FROM ${parquet(`gene_detail/chr=${hit.chr}/bin=${hit.bin}/data.parquet`)} WHERE gene_id = ${lit(hit.gene_id)}`)
+  if (!r) return null
+  const { exons_json, splice_json, ...gene } = r
+  const splice = (JSON.parse(splice_json ?? '[]') as SplicePhenotype[]).map(p => ({ ...p, gene_id: hit.gene_id, symbol: hit.symbol, chr: hit.chr, tss: hit.tss }))
+  return { gene: gene as Gene, exons: JSON.parse(exons_json ?? '[]') as Exon[], splice }
+}
 
 export const transPairs = (hit: SearchHit) =>
   rows<TransRow>(`SELECT * FROM ${parquet(`trans_pairs/chr=${hit.chr}/data.parquet`)}
@@ -86,7 +95,6 @@ export interface CisQuery {
 }
 
 function cisWhere(q: CisQuery): string {
-  const table = q.qtlType === 'e' ? 'cis_eqtl_nominal' : 'cis_sqtl_nominal'
   const parts = [`gene_id = ${lit(q.hit.gene_id)}`]
   if (q.qtlType === 's' && q.phenotypeId) parts.push(`phenotype_id = ${lit(q.phenotypeId)}`)
   if (q.maxP != null) parts.push(`pval_nominal <= ${q.maxP}`)
@@ -98,7 +106,7 @@ function cisWhere(q: CisQuery): string {
     else if (pos) parts.push(`CAST(position AS VARCHAR) LIKE ${lit(pos[1].replace(/,/g, '') + '%')}`)
     else parts.push('false')
   }
-  return `FROM ${parquet(`${table}/chr=${q.hit.chr}/data.parquet`)} WHERE ${parts.join(' AND ')}`
+  return `FROM ${parquet(nominalFile(q.hit, q.qtlType))} WHERE ${parts.join(' AND ')}`
 }
 
 const CIS_SORTABLE = new Set(['position', 'pval_nominal', 'slope', 'af', 'pip', 'tss_distance', 'ma_count'])
@@ -159,11 +167,18 @@ export interface CisHit extends Row {
 /** Every gene (or splice phenotype) whose cis window covers this position: one nominal row
  *  each. Touches every row group whose position range spans `pos` (~30 genes' worth), so it
  *  runs on demand, not on page load. */
-export const cisHitsAt = (chr: string, pos: number, qtlType: 'e' | 's') => {
+export const cisHitsAt = async (chr: string, pos: number, qtlType: 'e' | 's') => {
+  // the genes whose cis window covers this position are the tested genes with a TSS within
+  // 1 Mb; their bins (from the in-memory index) name the nominal files to scan
   const table = qtlType === 'e' ? 'cis_eqtl_nominal' : 'cis_sqtl_nominal'
+  const bins = await rows<{ bin: number }>(`SELECT DISTINCT bin FROM search_index
+    WHERE chr = ${lit(chr)} AND bin IS NOT NULL AND tss BETWEEN ${pos - 1_000_000} AND ${pos + 1_000_000}
+      ${qtlType === 's' ? 'AND n_sqtl_sig > 0' : ''} ORDER BY bin`)
+  if (!bins.length) return [] as CisHit[]
+  const files = bins.map(b => `'${table}/chr=${chr}/bin=${b.bin}/data.parquet'`).join(', ')
   return rows<CisHit>(`
     SELECT n.gene_id, s.symbol, ${qtlType === 's' ? 'n.phenotype_id,' : ''} n.tss_distance, n.pval_nominal, n.slope, n.slope_se, n.af, n.pip, n.cs_id
-    FROM ${parquet(`${table}/chr=${chr}/data.parquet`)} n
+    FROM read_parquet([${files}], hive_partitioning=false) n
     LEFT JOIN search_index s USING (gene_id)
     WHERE n.position = ${pos}
     ORDER BY n.pval_nominal`)
@@ -187,17 +202,7 @@ export const gwasBins = () => rows<GwasBin>(`SELECT * FROM ${parquet('gwas_dcm_b
 // ---- gene track under the locus plot --------------------------------------------------------
 
 export interface WindowGene extends Row { gene_id: string; symbol: string | null; start: number; end: number; strand: string; tss: number; biotype: string }
-/** Genes overlapping a window; genes.parquet row groups prune on (chr, tss). */
+/** Genes overlapping a window, from the in-memory search index (no fetch). */
 export const genesInWindow = (chr: string, lo: number, hi: number) =>
-  rows<WindowGene>(`SELECT gene_id, symbol, start, "end", strand, tss, biotype FROM ${parquet('genes.parquet')}
-    WHERE chr = ${lit(chr)} AND tss BETWEEN ${lo - 3_000_000} AND ${hi + 3_000_000} AND "end" >= ${lo} AND start <= ${hi}
-    ORDER BY start`)
-
-export interface Exon extends Row { start: number; end: number }
-/** Collapsed gene model: union of all transcripts' exons. */
-export const collapsedExons = (chr: string, geneId: string) =>
-  rows<Exon>(`
-    WITH e AS (SELECT start, "end" FROM ${parquet('exons.parquet')} WHERE gene_id = ${lit(geneId)} AND chr = ${lit(chr)}),
-    o AS (SELECT start, "end", max("end") OVER (ORDER BY start, "end" ROWS BETWEEN UNBOUNDED PRECEDING AND 1 PRECEDING) AS prev_max FROM e),
-    g AS (SELECT start, "end", sum(CASE WHEN prev_max IS NULL OR start > prev_max THEN 1 ELSE 0 END) OVER (ORDER BY start, "end") AS grp FROM o)
-    SELECT min(start) AS start, max("end") AS "end" FROM g GROUP BY grp ORDER BY start`)
+  rows<WindowGene>(`SELECT gene_id, symbol, start, "end", strand, tss, biotype FROM search_index
+    WHERE chr = ${lit(chr)} AND "end" >= ${lo} AND start <= ${hi} ORDER BY start`)
