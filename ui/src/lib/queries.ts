@@ -127,7 +127,7 @@ export const cisAll = (q: CisQuery) =>
 export const genesInRegion = (chr: string, start: number, end: number) =>
   rows<SearchHit>(`SELECT * FROM search_index WHERE chr = ${lit(chr)} AND tss BETWEEN ${start} AND ${end} ORDER BY tss`)
 
-export const manifest = () => fetch(`${(import.meta.env.VITE_DATA_BASE as string | undefined) || '/data'}/manifest.json`).then(r => r.json())
+export const manifest = () => fetch(`${(import.meta.env.VITE_DATA_BASE as string | undefined) ?? '/data'}/manifest.json`).then(r => r.json())
 
 // ---- variant page ---------------------------------------------------------------------------
 

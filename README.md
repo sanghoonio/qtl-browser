@@ -27,10 +27,8 @@ npm run dev                          # serves ../data/derived at /data with Rang
 npm run build && npm run preview     # production bundle, same data plugin
 ```
 
-The app reads `/data` on its own origin. In dev and preview that is the Vite plugin over
-`data/derived`; in production it is `ui/worker.js`, a Cloudflare Worker that serves `/data/*`
-from the R2 bucket binding with range support. `VITE_DATA_BASE` in `ui/.env.production` is
-empty; set it to a URL only to point a build at another host.
+`ui/.env.production` points production builds at the R2 bucket through `VITE_DATA_BASE`;
+`VITE_DATA_BASE= npm run build` (empty) makes a bundle that reads `/data` on its own origin.
 
 ## Deploy
 
@@ -46,13 +44,11 @@ Bucket, endpoint, public URL, allowed origins, and excludes are the `r2:` block 
 `pipeline/config.yaml`. Setting the CORS policy needs an Admin token or the dashboard
 (`upload.py cors --print` gives the JSON to paste).
 
-The UI is a Cloudflare Worker with static assets, built from the repo: root directory `ui`,
-build `npm run build`, deploy `npx wrangler deploy`. `ui/wrangler.jsonc` names `worker.js`,
-the `dist` assets with the single-page-application fallback, and the `DATA` binding to the
-bucket. The bucket's public r2.dev URL stays enabled for `upload.py check` but the site does
-not use it: r2.dev is HTTP/1.1 and a browser's reused connections stall on it for seconds.
-Workers caps assets at 25 MiB, so the DuckDB wasm modules are not bundled; the app loads
-DuckDB-WASM's jsDelivr bundles, as drumbeat-viewer does.
+The UI is a Cloudflare Workers static-assets project built from the repo: root directory
+`ui`, build `npm run build`, deploy `npx wrangler deploy`, with `ui/wrangler.jsonc` naming
+`dist` and the single-page-application fallback. Workers caps assets at 25 MiB, so the DuckDB
+wasm modules are not bundled; the app loads DuckDB-WASM's jsDelivr bundles, as drumbeat-viewer
+does.
 
 ## Data notes
 

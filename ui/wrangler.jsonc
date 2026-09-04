@@ -1,17 +1,12 @@
-// Cloudflare Worker: `worker.js` serves /data/* from the R2 bucket binding (HTTP/2, range
-// requests, no r2.dev) and hands everything else to the built app in dist/. Workers Builds:
-// root directory `ui`, build command `npm run build`, deploy command `npx wrangler deploy`.
-// The SPA fallback for /gene/... paths is `not_found_handling`; a `public/_redirects` with
-// `/* /index.html 200` is rejected by Workers as a redirect loop, so there is none.
+// Cloudflare Workers static-assets deploy. Workers Builds: root directory `ui`, build command
+// `npm run build`, deploy command `npx wrangler deploy`. The SPA fallback for /gene/... paths
+// is `not_found_handling`; a `public/_redirects` with `/* /index.html 200` is rejected by
+// Workers as a redirect loop, so there is none.
 {
   "name": "qtl-browser",
-  "main": "worker.js",
   "compatibility_date": "2026-09-01",
   "assets": {
     "directory": "./dist",
-    "binding": "ASSETS",
-    "not_found_handling": "single-page-application",
-    "run_worker_first": ["/data/*"]
-  },
-  "r2_buckets": [{ "binding": "DATA", "bucket_name": "qtl-browser" }]
+    "not_found_handling": "single-page-application"
+  }
 }
