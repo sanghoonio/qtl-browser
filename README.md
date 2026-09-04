@@ -41,8 +41,14 @@ uv run python -m pipeline.upload check               # HEAD + range GET on the p
 ```
 
 Bucket, endpoint, public URL, allowed origins, and excludes are the `r2:` block in
-`pipeline/config.yaml`. The UI is a Cloudflare Pages project built from `ui/` with
-`npm run build`, output `dist/`; `public/_redirects` handles path routing.
+`pipeline/config.yaml`. Setting the CORS policy needs an Admin token or the dashboard
+(`upload.py cors --print` gives the JSON to paste).
+
+The UI is a Cloudflare Workers static-assets project built from the repo: root directory
+`ui`, build `npm run build`, deploy `npx wrangler deploy`, with `ui/wrangler.jsonc` naming
+`dist` and the single-page-application fallback. Workers caps assets at 25 MiB, so the DuckDB
+wasm modules are not bundled; the app loads DuckDB-WASM's jsDelivr bundles, as drumbeat-viewer
+does.
 
 ## Data notes
 

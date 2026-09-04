@@ -4,10 +4,6 @@
  * `DATA_BASE` per query.
  */
 import * as duckdb from '@duckdb/duckdb-wasm'
-import mvpWasm from '@duckdb/duckdb-wasm/dist/duckdb-mvp.wasm?url'
-import mvpWorker from '@duckdb/duckdb-wasm/dist/duckdb-browser-mvp.worker.js?url'
-import ehWasm from '@duckdb/duckdb-wasm/dist/duckdb-eh.wasm?url'
-import ehWorker from '@duckdb/duckdb-wasm/dist/duckdb-browser-eh.worker.js?url'
 
 export const DATA_BASE: string =
   (import.meta.env.VITE_DATA_BASE as string | undefined)?.replace(/\/$/, '') || `${window.location.origin}/data`
@@ -17,15 +13,15 @@ export type Row = Record<string, unknown>
 let dbPromise: Promise<{ db: duckdb.AsyncDuckDB; con: duckdb.AsyncDuckDBConnection }> | null = null
 
 async function boot() {
-  const bundles: duckdb.DuckDBBundles = {
-    mvp: { mainModule: mvpWasm, mainWorker: mvpWorker },
-    eh: { mainModule: ehWasm, mainWorker: ehWorker },
-  }
-  const bundle = await duckdb.selectBundle(bundles)
-  const worker = new Worker(bundle.mainWorker!)
+  // wasm and worker from jsDelivr (the 36 MB module is over the Workers asset limit). The
+  // worker script is cross-origin, so it is loaded through a same-origin blob shim.
+  const bundle = await duckdb.selectBundle(duckdb.getJsDelivrBundles())
+  const workerUrl = URL.createObjectURL(new Blob([`importScripts("${bundle.mainWorker}");`], { type: 'text/javascript' }))
+  const worker = new Worker(workerUrl)
   const logger = new duckdb.VoidLogger()
   const db = new duckdb.AsyncDuckDB(logger, worker)
   await db.instantiate(bundle.mainModule, bundle.pthreadWorker)
+  URL.revokeObjectURL(workerUrl)
   const con = await db.connect()
   // footers are fetched once per file per session
   await con.query(`SET parquet_metadata_cache = true`).catch(() => {})
