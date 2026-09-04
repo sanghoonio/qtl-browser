@@ -51,12 +51,14 @@ export type GenomeTrackProps = {
   binThreshold?: number
   binUnit?: string
   className?: string
+  /** data still on its way: draw dimmed with a highlight sweeping across; full opacity when false */
+  loading?: boolean
 }
 
 /** Whole-genome bar with locus markers, d3 pan/zoom, keyboard navigation (ported from pegasus-v2f-ui). */
 export const GenomeTrack = forwardRef<GenomeTrackHandle, GenomeTrackProps>(function GenomeTrack(
   { loci, selectedLocusId, hoveredLocusId, onLocusSelect, onViewChange: onViewChangeProp, onSkipped, chromNames, chromLengths, traitColors, highlightRegion,
-    static: isStatic = false, bins, binCap = 20, binHeight = BIN_AREA, binThreshold, binUnit, className }, ref,
+    static: isStatic = false, bins, binCap = 20, binHeight = BIN_AREA, binThreshold, binUnit, className, loading = false }, ref,
 ) {
   // an empty `bins` array still reserves the bar area, so the track does not move when bins arrive
   const TOTAL_HEIGHT = ZOOM_PAD_TOP + CONTENT_HEIGHT + (bins ? BIN_GAP + binHeight : 0)
@@ -224,7 +226,8 @@ export const GenomeTrack = forwardRef<GenomeTrackHandle, GenomeTrackProps>(funct
 
   return (
     // inline style: the height holds the space on the unmeasured first frame, before the SVG exists
-    <div ref={containerRef} data-genome-track className={className} style={{ height: TOTAL_HEIGHT }}>
+    // dimmed while its data loads, then the whole track goes to full opacity at once
+    <div ref={containerRef} data-genome-track className={`relative transition-opacity duration-300 ${loading ? 'opacity-50' : 'opacity-100'} ${className ?? ''}`} style={{ height: TOTAL_HEIGHT }}>
       {containerWidth > 0 && <svg ref={svgRef} width={containerWidth} height={TOTAL_HEIGHT} className="select-none overflow-visible" onClick={handleClick} onMouseMove={handleMouseMove}>
         {/* hit surface first so labels (which opt back into pointer events) stay on top */}
         <rect width={containerWidth} height={TOTAL_HEIGHT} fill="transparent" />

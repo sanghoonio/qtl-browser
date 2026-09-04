@@ -29,11 +29,11 @@ export default function ExportMenu({ targets, background, disabled = false }: {
       </button>
       <ul tabIndex={0} className="dropdown-content z-20 mt-1 w-max min-w-64 rounded-lg border border-base-300 bg-base-100 p-1 shadow-lg">
         {targets.map(t => (
-          <li key={t.name} className="flex items-center justify-between gap-4 px-2 py-1 text-sm">
+          <li key={t.name} className="flex items-center justify-between gap-4 px-2 py-1 text-xs">
             <span className="whitespace-nowrap">{t.label}</span>
-            <span className="flex shrink-0 gap-1">
-              <button className="btn btn-xs btn-ghost" onClick={() => run(t, 'png')}>PNG</button>
-              <button className="btn btn-xs btn-ghost" onClick={() => run(t, 'svg')}>SVG</button>
+            <span className="flex shrink-0 gap-3">
+              <a href="#" className="link-quiet" onClick={e => { e.preventDefault(); run(t, 'png') }}>PNG</a>
+              <a href="#" className="link-quiet" onClick={e => { e.preventDefault(); run(t, 'svg') }}>SVG</a>
             </span>
           </li>
         ))}

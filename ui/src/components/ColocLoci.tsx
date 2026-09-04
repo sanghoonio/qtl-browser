@@ -88,6 +88,7 @@ export default function ColocLoci() {
           <GenomeTrack loci={loci} hoveredLocusId={hovered ?? undefined}
             onLocusSelect={id => { setHovered(null); if (id) navigate(`/gene/${id}`) }}
             onSkipped={setSkipped} chromNames={chrom.names} chromLengths={chrom.lengths} traitColors={TRAIT_COLORS} static
+            loading={hits === null || gwas === null}
             bins={bins} binCap={BIN_CAP} binHeight={144} binUnit="−log10 p" />
           {skipped > 0 && <div className="text-xs text-warning">{skipped} locus{skipped > 1 ? 'i' : ''} on chromosomes not in the reference could not be placed.</div>}
         </div>
