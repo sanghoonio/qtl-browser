@@ -32,7 +32,8 @@ r2:
   bucket: qtl-browser
   endpoint: https://02604ac525a365f5ff995694d8c3da5a.r2.cloudflarestorage.com
   public_url: https://pub-50e5b2fc28324ce29d894eba50691039.r2.dev
-  allowed_origins:            # add the Pages origin once it exists, then re-run `upload.py cors`
+  allowed_origins:            # after changing, re-run `upload.py cors` (or paste `cors --print` into the dashboard)
+    - https://qtl-browser.topchef.workers.dev
     - http://localhost:5173
     - http://localhost:4173
   exclude:                    # relative to data/derived; everything else is uploaded

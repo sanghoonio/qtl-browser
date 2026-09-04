@@ -1,0 +1,11 @@
+// Cloudflare Workers static-assets deploy. Workers Builds: root directory `ui`, build command
+// `npm run build`, deploy command `npx wrangler deploy`. `_redirects` is a Pages feature; on
+// Workers the SPA fallback is `not_found_handling` below.
+{
+  "name": "qtl-browser",
+  "compatibility_date": "2026-09-01",
+  "assets": {
+    "directory": "./dist",
+    "not_found_handling": "single-page-application"
+  }
+}
