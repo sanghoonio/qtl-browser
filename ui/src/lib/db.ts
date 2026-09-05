@@ -111,13 +111,13 @@ export function getCoordinator() {
   return mosaicReady.then(() => coordinator())
 }
 
-let locusSeq = 0
-/** Materialize one locus (a gene's or phenotype's cis window) as an in-memory table for the
- *  plot and its linked views: one range read, then every Mosaic query is local. Returns the
- *  table name; caller drops it when done. */
-export async function materializeLocus(sql: string): Promise<string> {
+let tableSeq = 0
+/** Materialize a query as an in-memory table: one range read, then every query against it
+ *  (Mosaic plots, paged tables, CSV export) is local. Used for a gene's cis window and its
+ *  trans rows. Returns the table name; caller drops it when done. */
+export async function materialize(sql: string, prefix = 'locus'): Promise<string> {
   const { con } = await getDB()
-  const name = `locus_${++locusSeq}`
+  const name = `${prefix}_${++tableSeq}`
   await con.query(`CREATE TABLE ${name} AS ${sql}`)
   return name
 }

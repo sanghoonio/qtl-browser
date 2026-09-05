@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState, type ReactNode } from 'react'
 import * as vg from '@uwdata/vgplot'
 import { Selection } from '@uwdata/mosaic-core'
-import { dropTable, getCoordinator, getDB, lit, materializeLocus, parquet } from '@/lib/db'
+import { dropTable, getCoordinator, getDB, lit, materialize, parquet } from '@/lib/db'
 import { CS_COLORS, CS_DOMAIN, CS_SWATCH_CLIP, CS_SYMBOLS, isDark } from '@/lib/plot-theme'
 import type { SearchHit } from '@/lib/queries'
 import { CompareSkeleton, LocusSkeleton } from '@/components/plot-skeleton'
@@ -54,6 +54,7 @@ function locusSQL(spec: LocusSpec): string {
            coalesce(-log10(nullif(q.pval_nominal, 0)), max(-log10(nullif(q.pval_nominal, 0))) OVER () * 1.05) AS nlp,
            q.pval_nominal = 0 AS clipped,
            q.pval_nominal, q.slope, q.slope_se, q.af, q.pip, q.cs_id, q.rs_number, q.A1, q.A2,
+           q.tss_distance, q.ma_samples, q.ma_count,
            coalesce(q.cs_id::VARCHAR, 'none') AS cs,
            g.p AS gwas_p, -log10(g.p) AS gwas_nlp,
            CASE WHEN g.ea = q.A1 THEN g.beta ELSE -g.beta END AS gwas_beta,
@@ -75,7 +76,7 @@ function locusSQL(spec: LocusSpec): string {
 
 /** -log10 p against position for one cis window. Dots colored by credible-set membership,
  *  PIP as opacity, a TSS rule, and Observable Plot's nearest-point tip. */
-export default function LocusPlot({ spec, onCount, onLegend, onExportMenu, onCredibleSets }: {
+export default function LocusPlot({ spec, onCount, onLegend, onExportMenu, onCredibleSets, onTable }: {
   spec: LocusSpec
   onCount?: (n: number) => void
   onLegend?: (sets: string[] | null) => void
@@ -83,6 +84,9 @@ export default function LocusPlot({ spec, onCount, onLegend, onExportMenu, onCre
   onExportMenu?: (menu: ReactNode | null) => void
   /** credible-set members of this locus, read from the materialized window (no extra fetch) */
   onCredibleSets?: (rows: CredibleSetRow[] | null) => void
+  /** the materialized window's table name once it exists (null while loading or after it is
+   *  dropped; `failed` when the materialize threw), so the cis table can page off it */
+  onTable?: (name: string | null, failed?: boolean) => void
 }) {
   const host = useRef<HTMLDivElement>(null)
   const [state, setState] = useState<'loading' | 'ready' | 'error'>('loading')
@@ -129,11 +133,13 @@ export default function LocusPlot({ spec, onCount, onLegend, onExportMenu, onCre
     setLink(null)
     onLegend?.(null)
     onCredibleSets?.(null)
+    onTable?.(null)
     ;(async () => {
       try {
         await getCoordinator()
-        table = await materializeLocus(locusSQL(spec))
+        table = await materialize(locusSQL(spec))
         if (!alive) return
+        onTable?.(table)
         const { con } = await getDB()
         const agg = (await con.query(`SELECT count(*) AS n, max(nlp) AS ymax FROM ${table}`)).toArray()[0]
         const sets = (await con.query(`SELECT DISTINCT cs FROM ${table} WHERE cs <> 'none' ORDER BY cs`)).toArray().map(r => String(r.cs))
@@ -161,11 +167,12 @@ export default function LocusPlot({ spec, onCount, onLegend, onExportMenu, onCre
         setTableName(table)
       } catch (e) {
         console.error(e)
-        if (alive) setState('error')
+        if (alive) { setState('error'); onTable?.(null, true) }
       }
     })()
     return () => {
       alive = false
+      onTable?.(null)
       if (table) dropTable(table)
     }
   }, [key]) // eslint-disable-line react-hooks/exhaustive-deps

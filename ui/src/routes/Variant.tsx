@@ -98,7 +98,7 @@ function VariantBody({ vars }: { vars: VariantRow[] }) {
                     <tr key={g.gene_id} className="hover:bg-base-200">
                       <td><span className="badge badge-primary badge-xs">eQTL</span></td>
                       <td><Link className="font-medium link-quiet" to={`/gene/${g.gene_id}`}>{g.symbol ?? g.gene_id}</Link></td>
-                      <td className="text-base-content/50">expression</td>
+                      <td className="tabular-nums text-base-content/60">{g.gene_id}</td>
                       <td className="text-right tabular-nums">{fmtSlopeSE(g.slope, g.slope_se)}</td>
                       <td className="text-right tabular-nums">{fmtP(g.pval_perm)}</td>
                       <td className="text-right">{g.is_egene ? <span className="badge badge-primary badge-xs">eGene</span> : ''}</td>
@@ -131,7 +131,7 @@ function VariantBody({ vars }: { vars: VariantRow[] }) {
                     <tr key={i} className="hover:bg-base-200">
                       <td><span className={`badge badge-xs ${c.qtl_type === 'e' ? 'badge-primary' : 'badge-secondary'}`}>{c.qtl_type === 'e' ? 'eQTL' : 'sQTL'}</span></td>
                       <td><Link className="font-medium link-quiet" to={`/gene/${c.gene_id}${c.qtl_type === 's' ? '?tab=sqtl' : ''}`}>{c.symbol ?? c.gene_id}</Link></td>
-                      <td className="tabular-nums text-base-content/60">{c.qtl_type === 'e' ? 'expression' : fmtPhenotype(c.phenotype_id)}</td>
+                      <td className="tabular-nums text-base-content/60">{c.qtl_type === 'e' ? c.gene_id : fmtPhenotype(c.phenotype_id)}</td>
                       <td><span className="badge badge-ghost badge-sm">{c.cs_id}</span></td>
                       <td className="text-right tabular-nums font-medium">{fmtNum(c.pip)}</td>
                     </tr>
@@ -152,10 +152,10 @@ function VariantBody({ vars }: { vars: VariantRow[] }) {
                 <tbody>
                   {trans.slice(transOffset, transOffset + transPageSize).map((r, i) => (
                     <tr key={i} className="cursor-pointer transition-colors hover:bg-base-200/60"
-                      onClick={() => navigate(`/gene/${r.gene_id}${r.qtl_type === 's' ? '?tab=sqtl' : '?tab=trans'}`)}>
+                      onClick={() => navigate(`/gene/${r.gene_id}${r.qtl_type === 's' ? '?tab=sqtl' : ''}`)}>
                       <td><span className={`badge badge-xs ${r.qtl_type === 'e' ? 'badge-primary' : 'badge-secondary'}`}>{r.qtl_type === 'e' ? 'eQTL' : 'sQTL'}</span></td>
                       <td className="font-medium">{r.symbol ?? r.gene_id}</td>
-                      <td className="tabular-nums text-base-content/60">{r.qtl_type === 'e' ? 'expression' : fmtPhenotype(r.phenotype_id)}</td>
+                      <td className="tabular-nums text-base-content/60">{r.qtl_type === 'e' ? r.gene_id : fmtPhenotype(r.phenotype_id)}</td>
                       <td className="tabular-nums text-base-content/60">{r.gene_chr}</td>
                       <td className="text-right tabular-nums">{fmtP(r.pval)}</td>
                       <td className="text-right tabular-nums">{fmtSlopeSE(r.beta, r.beta_se)}</td>

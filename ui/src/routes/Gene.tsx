@@ -1,5 +1,5 @@
 import { useEffect, useState, type ReactNode } from 'react'
-import { Link, useNavigate, useParams, useSearchParams } from 'react-router'
+import { Link, useParams, useSearchParams } from 'react-router'
 import ExternalLink from '@/components/ExternalLink'
 import { Page } from '@/components/page'
 import { PageHeader } from '@/components/page-header'
@@ -8,29 +8,48 @@ import { KvTable } from '@/components/kv-table'
 import { Tooltip } from '@/components/tooltip'
 import { Segmented } from '@/components/segmented'
 import { DetailSkeleton, Empty, TableSkeleton, TabSkeleton } from '@/components/states'
-import { Pager } from '@/components/pager'
 import CredibleSetTable from '@/components/CredibleSetTable'
 import CisTable from '@/components/CisTable'
+import TransTable from '@/components/TransTable'
 import LocusPlot, { LocusLegend } from '@/components/LocusPlot'
 import { COLOC_EQTL_GENES, COLOC_SQTL_GENES } from '@/lib/coloc'
 import { ensemblGene, gtexGene, ucsc } from '@/lib/links'
 import { fmtBp, fmtInt, fmtNum, fmtP, fmtPhenotype, fmtSlopeSE } from '@/lib/format'
-import { geneDetail, resolveGene, transPairs, type GeneDetail,
-  type CredibleSetRow, type Gene as GeneRow, type SearchHit, type TransRow } from '@/lib/queries'
+import { dropTable, materialize } from '@/lib/db'
+import { geneDetail, resolveGene, transSQL, type GeneDetail,
+  type CredibleSetRow, type Gene as GeneRow, type SearchHit } from '@/lib/queries'
 
-type Tab = 'eqtl' | 'sqtl' | 'trans'
+type Tab = 'eqtl' | 'sqtl'
 
 export default function Gene() {
   const { id = '' } = useParams()
   const [params, setParams] = useSearchParams()
   const [hit, setHit] = useState<SearchHit | null | undefined>(undefined)
-  // a gene tested for sQTL but not eQTL opens on its sQTL tab
-  const tab: Tab = (params.get('tab') as Tab | null) ?? (hit && !hit.tested && hit.bin != null ? 'sqtl' : 'eqtl')
+  // a gene tested for sQTL but not eQTL opens on its sQTL tab; any other tab value (old
+  // `?tab=trans` links) falls back to eQTL
+  const tab: Tab = params.get('tab') === 'sqtl' ? 'sqtl' : params.get('tab') === 'eqtl' ? 'eqtl' : (hit && !hit.tested && hit.bin != null ? 'sqtl' : 'eqtl')
   const [detail, setDetail] = useState<GeneDetail | null>(null)
+  // the gene's trans rows as an in-memory table, materialized once per gene alongside
+  // gene_detail and dropped when the gene changes; both tabs' trans tables page off it
+  const [transTable, setTransTable] = useState<string | null>(null)
 
   useEffect(() => {
-    setHit(undefined); setDetail(null)
-    resolveGene(id).then(h => { setHit(h); if (h?.bin != null) geneDetail(h).then(setDetail) })
+    let alive = true
+    let table: string | null = null
+    setHit(undefined); setDetail(null); setTransTable(null)
+    resolveGene(id).then(async h => {
+      if (!alive) return
+      setHit(h)
+      if (h?.bin == null) return
+      geneDetail(h).then(d => { if (alive) setDetail(d) })
+      try {
+        const t = await materialize(transSQL(h), 'trans')
+        if (!alive) { dropTable(t); return }
+        table = t
+        setTransTable(t)
+      } catch (e) { console.error(e) }
+    })
+    return () => { alive = false; if (table) dropTable(table) }
   }, [id])
 
   // the page-level skeleton follows the tab in the URL: only the eQTL tab opens with a locus plot
@@ -38,11 +57,9 @@ export default function Gene() {
   if (hit === null) return <Page><Empty label={`No gene matches “${id}”.`} /></Page>
 
   const sym = hit.symbol ?? hit.gene_id
-  const g = detail?.gene ?? null
   const tabs = [
     { value: 'eqtl' as Tab, label: 'eQTL' },
     { value: 'sqtl' as Tab, label: `sQTL${hit.n_sqtl_sig ? ` (${hit.n_sqtl_sig})` : ''}` },
-    { value: 'trans' as Tab, label: `trans${g ? ` (${g.n_trans_pairs})` : ''}` },
   ]
   return (
     <Page>
@@ -64,9 +81,8 @@ export default function Gene() {
         <Empty label={`${sym} is annotated in GENCODE v34 but was not tested for QTL (filtered out by expression or mappability).`} />
       ) : (
         <>
-          {tab === 'eqtl' && (detail ? <EqtlTab hit={hit} d={detail} /> : <TabSkeleton plot chr={hit.chr} />)}
-          {tab === 'sqtl' && (detail ? <><GeneTable g={detail.gene} /><SqtlTab hit={hit} d={detail} /></> : <TabSkeleton kvRows={4} />)}
-          {tab === 'trans' && (g ? <><GeneTable g={g} /><TransTab hit={hit} /></> : <TabSkeleton kvRows={4} />)}
+          {tab === 'eqtl' && (detail ? <EqtlTab hit={hit} d={detail} transTable={transTable} /> : <TabSkeleton plot chr={hit.chr} />)}
+          {tab === 'sqtl' && (detail ? <><GeneTable g={detail.gene} /><SqtlTab hit={hit} d={detail} transTable={transTable} /></> : <TabSkeleton kvRows={4} />)}
         </>
       )}
     </Page>
@@ -96,12 +112,29 @@ function GeneTable({ g }: { g: GeneRow }) {
   return <div className="mb-8 grid items-start gap-4 md:grid-cols-2"><KvTable rows={geneRows(g)} /></div>
 }
 
-function EqtlTab({ hit, d }: { hit: SearchHit; d: GeneDetail }) {
+/** Reserved slot for the coloc results (PP.H4, sentinel) against the Jurgens 2024 DCM GWAS.
+ *  The Zenodo record has single-trait SuSiE fine-mapping only, so until the authors share
+ *  the coloc tables the section can only restate the hard-coded gene list. */
+function ColocSection({ sym, qtlType }: { sym: string; qtlType: 'e' | 's' }) {
+  const listed = (qtlType === 'e' ? COLOC_EQTL_GENES : COLOC_SQTL_GENES).includes(sym)
+  return (
+    <SectionPanel title="GWAS colocalization" description="coloc with the Jurgens et al. 2024 DCM GWAS.">
+      <Empty label={listed ? 'Reported as colocalized (PP.H4 > 0.8); coloc statistics not yet available.' : 'No reported colocalization.'} />
+    </SectionPanel>
+  )
+}
+
+/** The locus plot's materialized window, handed up so the cis table can page off it. */
+type LocusTable = { name: string | null; failed: boolean }
+const NO_TABLE: LocusTable = { name: null, failed: false }
+
+function EqtlTab({ hit, d, transTable }: { hit: SearchHit; d: GeneDetail; transTable: string | null }) {
   const g = d.gene
   const [cs, setCs] = useState<CredibleSetRow[] | null>(null)
   const [nVar, setNVar] = useState<number | null>(null)
   const [legend, setLegend] = useState<string[] | null>(null)
   const [exportMenu, setExportMenu] = useState<ReactNode>(null)
+  const [locus, setLocus] = useState<LocusTable>(NO_TABLE)
   useEffect(() => { setCs(null); setNVar(null) }, [hit])
   const sym = hit.symbol ?? hit.gene_id
   if (!g.tested) return <><GeneTable g={g} /><Empty label={`${sym} was not tested for cis-eQTL (filtered out by expression or mappability); see the sQTL tab.`} /></>
@@ -116,7 +149,7 @@ function EqtlTab({ hit, d }: { hit: SearchHit; d: GeneDetail }) {
           { label: 'A1 frequency', value: fmtNum(g.lead_af) },
         ]} />
         <KvTable align="right" rows={[
-          { label: 'Distance to TSS', value: fmtBp(g.lead_tss_distance) },
+          { label: 'Lead distance to TSS', value: fmtBp(g.lead_tss_distance) },
           { label: 'Variants tested', value: fmtInt(g.num_var) },
           { label: 'Slope ± SE', value: fmtSlopeSE(g.slope, g.slope_se) },
           { label: 'Nominal p', value: fmtP(g.pval_nominal) },
@@ -129,25 +162,29 @@ function EqtlTab({ hit, d }: { hit: SearchHit; d: GeneDetail }) {
       <SectionPanel title="Locus"
         description={<span className="inline-flex items-center gap-3 tabular-nums"><span>{g.chr}:{fmtInt(g.tss - 1_000_000)}–{fmtInt(g.tss + 1_000_000)}{nVar != null && ` · ${fmtInt(nVar)} variants`}</span>{exportMenu}</span>}
         action={legend && <LocusLegend sets={legend} />}>
-        <LocusPlot spec={{ hit, qtlType: 'e', tss: g.tss, exons: d.exons }} onCount={setNVar} onLegend={setLegend} onExportMenu={setExportMenu} onCredibleSets={setCs} />
+        <LocusPlot spec={{ hit, qtlType: 'e', tss: g.tss, exons: d.exons }} onCount={setNVar} onLegend={setLegend} onExportMenu={setExportMenu} onCredibleSets={setCs}
+          onTable={(name, failed) => setLocus({ name, failed: !!failed })} />
       </SectionPanel>
       <SectionPanel title="SuSiE 95% credible sets">
         {cs === null ? <TableSkeleton columns={[{ w: 'w-4' }, { w: 'w-12' }, { w: 'w-8', align: 'right' }, { w: 'w-24' }, { w: 'w-10', align: 'right' }, { w: 'w-10', align: 'right' }, { w: 'w-16', align: 'right' }]} rows={2} /> : <CredibleSetTable rows={cs} />}
       </SectionPanel>
-      <SectionPanel title="All variants in the cis window" description="±1 Mb of the TSS; rows tinted when the variant is in a credible set.">
-        <CisTable query={{ hit, qtlType: 'e' }} fileStem={`${sym}_cis_eqtl`} />
+      <ColocSection sym={sym} qtlType="e" />
+      <SectionPanel title="cis associations" description="Every variant within ±1 Mb of the TSS; rows tinted when the variant is in a credible set. Click a row to open the variant.">
+        <CisTable table={locus.name} failed={locus.failed} chr={hit.chr} qtlType="e" fileStem={`${sym}_cis_eqtl`} />
       </SectionPanel>
+      <TransSection table={transTable} qtlType="e" fileStem={`${sym}_trans_eqtl`} />
     </div>
   )
 }
 
-function SqtlTab({ hit, d }: { hit: SearchHit; d: GeneDetail }) {
+function SqtlTab({ hit, d, transTable }: { hit: SearchHit; d: GeneDetail; transTable: string | null }) {
   const phens = d.splice
   const [cs, setCs] = useState<CredibleSetRow[] | null>(null)
   const [selected, setSelected] = useState<string | null>(() => phens.find(x => x.is_sqtl)?.phenotype_id ?? null)
   const [nVar, setNVar] = useState<number | null>(null)
   const [legend, setLegend] = useState<string[] | null>(null)
   const [exportMenu, setExportMenu] = useState<ReactNode>(null)
+  const [locus, setLocus] = useState<LocusTable>(NO_TABLE)
   useEffect(() => {
     setSelected(phens.find(x => x.is_sqtl)?.phenotype_id ?? null); setNVar(null); setCs(null)
   }, [hit, phens])
@@ -185,56 +222,32 @@ function SqtlTab({ hit, d }: { hit: SearchHit; d: GeneDetail }) {
           <SectionPanel title="Locus"
             description={<span className="inline-flex items-center gap-3 tabular-nums"><span>intron {fmtPhenotype(sel.phenotype_id)}{nVar != null && ` · ${fmtInt(nVar)} variants`}</span>{exportMenu}</span>}
             action={legend && <LocusLegend sets={legend} />}>
-            <LocusPlot spec={{ hit, qtlType: 's', phenotypeId: sel.phenotype_id, tss: sel.tss, exons: d.exons, intron: { start: sel.intron_start, end: sel.intron_end } }} onCount={setNVar} onLegend={setLegend} onExportMenu={setExportMenu} onCredibleSets={setCs} />
+            <LocusPlot spec={{ hit, qtlType: 's', phenotypeId: sel.phenotype_id, tss: sel.tss, exons: d.exons, intron: { start: sel.intron_start, end: sel.intron_end } }} onCount={setNVar} onLegend={setLegend} onExportMenu={setExportMenu} onCredibleSets={setCs}
+              onTable={(name, failed) => setLocus({ name, failed: !!failed })} />
           </SectionPanel>
           <SectionPanel title="SuSiE 95% credible sets">
             {cs === null ? <TableSkeleton columns={[{ w: 'w-4' }, { w: 'w-12' }, { w: 'w-8', align: 'right' }, { w: 'w-24' }, { w: 'w-10', align: 'right' }, { w: 'w-10', align: 'right' }, { w: 'w-16', align: 'right' }]} rows={2} /> : <CredibleSetTable rows={cs} />}
           </SectionPanel>
-          <SectionPanel title="All variants in the cis window">
-            <CisTable query={{ hit, qtlType: 's', phenotypeId: sel.phenotype_id }} fileStem={`${sym}_${sel.cluster_id}_${sel.intron_start}_${sel.intron_end}_cis_sqtl`} />
+          <ColocSection sym={sym} qtlType="s" />
+          <SectionPanel title="cis associations" description={<>Every variant within ±1 Mb of the TSS for <b className="font-medium text-base-content/80">this intron</b>; rows tinted when the variant is in a credible set. Click a row to open the variant.</>}>
+            <CisTable table={locus.name} failed={locus.failed} chr={hit.chr} qtlType="s" phenotypeId={sel.phenotype_id} fileStem={`${sym}_${sel.cluster_id}_${sel.intron_start}_${sel.intron_end}_cis_sqtl`} />
           </SectionPanel>
         </>
       )}
+      <TransSection table={transTable} qtlType="s" fileStem={`${sym}_trans_sqtl`} />
     </div>
   )
 }
 
-function TransTab({ hit }: { hit: SearchHit }) {
-  const navigate = useNavigate()
-  const [t, setT] = useState<TransRow[] | null>(null)
-  const [offset, setOffset] = useState(0)
-  const [pageSize, setPageSize] = useState(10)
-  useEffect(() => {
-    let alive = true
-    setT(null); setOffset(0)
-    transPairs(hit).then(rows => { if (alive) setT(rows) })
-    return () => { alive = false }
-  }, [hit])
-  if (t === null) return <TableSkeleton columns={[{ w: 'w-10' }, { w: 'w-40' }, { w: 'w-24' }, { w: 'w-20' }, { w: 'w-10', align: 'right' }, { w: 'w-14', align: 'right' }, { w: 'w-20', align: 'right' }, { w: 'w-10', align: 'right' }]} />
-  if (!t.length) return <Empty label="No significant trans associations for this gene." />
+/** Variants outside the cis window associated with this gene, for one QTL type. The eQTL
+ *  table needs no phenotype column (the phenotype is the gene); the sQTL table names the
+ *  intron, since a gene's trans sQTL rows can hit different introns. */
+function TransSection({ table, qtlType, fileStem }: { table: string | null; qtlType: 'e' | 's'; fileStem: string }) {
+  const what = qtlType === 'e' ? 'expression' : 'splicing'
   return (
     <SectionPanel title="trans associations"
-      description="Variants outside the cis window associated with this gene's expression (e) or splicing (s); up to 2,000 by p-value. Click a row to open the variant.">
-      <div className="overflow-x-auto rounded-lg border border-base-300">
-        <table className="table table-sm">
-          <thead><tr><th>Type</th><th>Phenotype</th><th>Variant</th><th>rsID</th><th className="text-right">AF</th><th className="text-right">p</th><th className="text-right">Beta ± SE</th><th className="text-right">r²</th></tr></thead>
-          <tbody>
-            {t.slice(offset, offset + pageSize).map((r, i) => (
-              <tr key={i} className="cursor-pointer transition-colors hover:bg-base-200/60" onClick={() => navigate(`/variant/${r.rsid ?? `${r.variant_chr}:${r.position}`}`)}>
-                <td><span className={`badge badge-xs ${r.qtl_type === 'e' ? 'badge-primary' : 'badge-secondary'}`}>{r.qtl_type === 'e' ? 'eQTL' : 'sQTL'}</span></td>
-                <td className="tabular-nums text-base-content/60">{r.qtl_type === 'e' ? 'expression' : fmtPhenotype(r.phenotype_id)}</td>
-                <td className="tabular-nums">{r.variant_chr}:{fmtInt(r.position)}</td>
-                <td>{r.rsid ?? ''}</td>
-                <td className="text-right tabular-nums text-base-content/60">{fmtNum(r.af)}</td>
-                <td className="text-right tabular-nums">{fmtP(r.pval)}</td>
-                <td className="text-right tabular-nums">{fmtSlopeSE(r.beta, r.beta_se)}</td>
-                <td className="text-right tabular-nums text-base-content/60">{fmtNum(r.r2)}</td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
-      </div>
-      <Pager total={t.length} offset={offset} pageSize={pageSize} onPage={setOffset} onPageSize={n => { setPageSize(n); setOffset(0) }} />
+      description={<>Every variant outside the cis window associated with this gene's {what}{qtlType === 's' && <> <b className="font-medium text-base-content/80">(any intron)</b></>}. Click a row to open the variant.</>}>
+      <TransTable table={table} qtlType={qtlType} fileStem={fileStem} />
     </SectionPanel>
   )
 }

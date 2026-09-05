@@ -1,14 +1,19 @@
-"""Step 7: re-encode the cis nominal pair files, one row group per gene.
+"""Step 7: re-encode the cis nominal pair files, one row group per phenotype: per gene for
+eQTL, per intron for sQTL. Every UI query filters on the phenotype, and DuckDB reads whole
+row groups, so a per-gene sQTL group would pull every significant intron of the gene to show
+one (CAMK2D: 1.4 MB for nine introns instead of ~150 KB).
 
 Memory-bounded: DuckDB writes the joined, sorted rows to a temporary parquet under its own
 memory limit (spilling to disk if needed); pyarrow then streams that file batch by batch and
-re-emits it with one row group per gene. Nothing holds a whole chromosome in memory.
+re-emits it with one row group per phenotype. Nothing holds a whole chromosome in memory.
 
-Encodings (measured on chr22, 2026-09-03): per-gene row groups lose the cross-gene repetition
-that dictionary encoding exploits in the raw million-row groups, so positions use
-DELTA_BINARY_PACKED, floats use BYTE_STREAM_SPLIT, and rsIDs are stored as integer rs_number
-(delta for eQTL, dictionary for sQTL where the same variant repeats across a gene's phenotypes).
-Result: eQTL files ~10% smaller than raw, sQTL ~12% smaller than the plain-dictionary version.
+Encodings (measured on chr22, 2026-09-03): per-phenotype row groups lose the cross-phenotype
+repetition that dictionary encoding exploits in the raw million-row groups, so positions use
+DELTA_BINARY_PACKED, floats use BYTE_STREAM_SPLIT, and rsIDs are stored as delta-encoded
+integer rs_number. Result: eQTL files ~10% smaller than raw. sQTL files grew ~15% (1.99 to
+2.28 GB) when the groups went from per gene to per intron (2026-09-05), since the variant
+columns (rs_number, af, ma_count, alleles) repeat per intron and are no longer compressed
+across the gene block.
 
 `sqtl_nominal: significant` in the config keeps sQTL rows only for introns flagged is_sqtl in
 splice_phenotypes (84.5M of 499.6M rows, 1.8 GB instead of 10.8), which is what fits the R2
@@ -30,7 +35,7 @@ FLOATS = ("af", "slope", "slope_se", "pval_nominal", "pip")
 ENCODING = {
     "e": {"position": "DELTA_BINARY_PACKED", "tss_distance": "DELTA_BINARY_PACKED", "rs_number": "DELTA_BINARY_PACKED",
           **{c: "BYTE_STREAM_SPLIT" for c in FLOATS}},
-    "s": {"position": "DELTA_BINARY_PACKED", "tss_distance": "DELTA_BINARY_PACKED",
+    "s": {"position": "DELTA_BINARY_PACKED", "tss_distance": "DELTA_BINARY_PACKED", "rs_number": "DELTA_BINARY_PACKED",
           **{c: "BYTE_STREAM_SPLIT" for c in FLOATS}},
 }
 
@@ -146,7 +151,7 @@ def _one(args) -> tuple[str, str, int, int]:
         raise RuntimeError(f"{src}: row count changed {raw_n} -> {tmp_n} (join duplicated rows)")
     con.close()
     shutil.rmtree(work_tmp, ignore_errors=True)
-    groups, files = _regroup(tmp, out, "gene_id", STATS[qtl_type], ENCODING[qtl_type])
+    groups, files = _regroup(tmp, out, "gene_id" if qtl_type == "e" else "phenotype_id", STATS[qtl_type], ENCODING[qtl_type])
     tmp.unlink()
     return qtl_type, chrom, raw_n, groups, files
 

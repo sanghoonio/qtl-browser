@@ -131,6 +131,19 @@ def validate(cfg: Config) -> None:
         if st and st.min <= "ENSG00000128591" <= st.max:
             hits += 1
     check(hits == 1, f"FLNC query touches {hits} row group(s) of {md.num_row_groups} in chr7 bin {flnc_bin} eQTL file ({md.serialized_size / 1e3:.0f} KB footer)")
+    # sQTL rows are grouped per intron: one intron of CAMK2D (nine significant) touches one row group
+    camk2d = "ENSG00000145349"
+    camk2d_bin = con.execute(f"SELECT bin FROM '{cfg.derived / 'genes.parquet'}' WHERE gene_id = '{camk2d}'").fetchone()[0]
+    introns = [r[0] for r in con.execute(f"SELECT phenotype_id FROM '{cfg.derived / 'splice_phenotypes.parquet'}' WHERE gene_id = '{camk2d}' AND is_sqtl").fetchall()]
+    md = pq.read_metadata(cfg.derived / "cis_sqtl_nominal" / "chr=chr4" / f"bin={camk2d_bin}" / "data.parquet")
+    pcol = [md.row_group(0).column(j).path_in_schema for j in range(md.row_group(0).num_columns)].index("phenotype_id")
+    touched = {p: 0 for p in introns}
+    for i in range(md.num_row_groups):
+        st = md.row_group(i).column(pcol).statistics
+        for p in introns:
+            if st and st.min <= p <= st.max:
+                touched[p] += 1
+    check(all(n == 1 for n in touched.values()), f"each of CAMK2D's {len(introns)} significant introns touches one row group of {md.num_row_groups} in chr4 bin {camk2d_bin} sQTL file ({md.serialized_size / 1e3:.0f} KB footer): {sorted(set(touched.values()))}")
     n_binned = con.execute(f"SELECT count(*) FROM '{cfg.derived / 'genes.parquet'}' WHERE bin IS NOT NULL").fetchone()[0]
     n_detail = con.execute(f"SELECT count(*) FROM read_parquet('{cfg.derived}/gene_detail/*/*/*.parquet', hive_partitioning=false)").fetchone()[0]
     check(n_detail == n_binned, f"gene_detail has one row per binned (eQTL- or sQTL-tested) gene ({n_detail} vs {n_binned})")

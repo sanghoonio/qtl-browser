@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react'
 import { Download, Search as SearchIcon } from 'lucide-react'
-import { Link } from 'react-router'
+import { useNavigate } from 'react-router'
 import { SortableTh, type SortState } from '@/components/sortable-th'
 import { Pager } from '@/components/pager'
 import { Empty, TableSkeleton } from '@/components/states'
@@ -12,9 +12,12 @@ import { downloadCSV } from '@/lib/csv'
 const SKEL = [{ w: 'w-24' }, { w: 'w-20' }, { w: 'w-10' }, { w: 'w-14', align: 'right' as const }, { w: 'w-10', align: 'right' as const },
   { w: 'w-10', align: 'right' as const }, { w: 'w-14', align: 'right' as const }, { w: 'w-12', align: 'right' as const }, { w: 'w-12', align: 'right' as const }, { w: 'w-10', align: 'right' as const }]
 
-/** Sortable, filterable page through one gene's (or phenotype's) cis window. Each change is
- *  one DuckDB query against a single row group, plus a count query. */
-export default function CisTable({ query, fileStem }: { query: CisQuery; fileStem: string }) {
+/** Sortable, filterable page through one gene's (or intron's) cis window, off the table the
+ *  locus plot materialized. Each change is one local query plus a count. `table` is null
+ *  while the window loads; `failed` when the locus could not be materialized. */
+export default function CisTable({ table, failed, chr, qtlType, phenotypeId, fileStem }: {
+  table: string | null; failed?: boolean; chr: string; qtlType: 'e' | 's'; phenotypeId?: string; fileStem: string
+}) {
   const [sort, setSort] = useState<SortState>({ by: 'pval_nominal', order: 'asc' })
   const [maxP, setMaxP] = useState('')
   const [search, setSearch] = useState('')
@@ -24,31 +27,39 @@ export default function CisTable({ query, fileStem }: { query: CisQuery; fileSte
   const [total, setTotal] = useState(0)
   const [busy, setBusy] = useState(false)
 
-  const key = `${query.hit.gene_id}|${query.qtlType}|${query.phenotypeId ?? ''}`
-  useEffect(() => { setOffset(0); setData(null) }, [key])
+  useEffect(() => { setOffset(0); setData(null) }, [table])
   useEffect(() => setOffset(0), [sort, maxP, search, pageSize])
 
+  const query = (): CisQuery => {
+    const p = maxP === '' ? undefined : Number(maxP)
+    return { table: table!, chr, qtlType, phenotypeId, maxP: Number.isFinite(p) ? p : undefined, search: search || undefined,
+      orderBy: sort.by || 'pval_nominal', desc: sort.by ? sort.order === 'desc' : false, limit: pageSize, offset }
+  }
+
   useEffect(() => {
+    if (!table) return
     let alive = true
     setBusy(true)
-    const p = maxP === '' ? undefined : Number(maxP)
-    const q: CisQuery = { ...query, maxP: Number.isFinite(p) ? p : undefined, search: search || undefined,
-      orderBy: sort.by || 'pval_nominal', desc: sort.by ? sort.order === 'desc' : false, limit: pageSize, offset }
+    const q = query()
     const t = setTimeout(() => {
       Promise.all([cisRows(q), cisCount(q)]).then(([r, n]) => { if (alive) { setData(r); setTotal(n) } })
+        .catch(() => {})   // the table was dropped under us (locus changed): the next effect run replaces it
         .finally(() => { if (alive) setBusy(false) })
     }, search ? 150 : 0)
     return () => { alive = false; clearTimeout(t) }
-  }, [key, sort, maxP, search, offset, pageSize]) // eslint-disable-line react-hooks/exhaustive-deps
+  }, [table, sort, maxP, search, offset, pageSize]) // eslint-disable-line react-hooks/exhaustive-deps
 
   const dark = useIsDark()
+  const navigate = useNavigate()
+  const variantPath = (r: CisRow) => `/variant/${r.rs_number != null ? rsFromNumber(r.rs_number) : `${chr}:${r.position}`}`
 
   async function exportCSV() {
-    const all = await cisAll(query)
+    const all = await cisAll(query())
     const cols = ['position', 'rsid', 'A1', 'A2', 'tss_distance', 'af', 'ma_samples', 'ma_count', 'pval_nominal', 'slope', 'slope_se', 'pip', 'cs_id']
-    downloadCSV(`${fileStem}.csv`, all.map(r => ({ ...r, rsid: rsFromNumber(r.rs_number) })), query.qtlType === 's' ? ['phenotype_id', ...cols] : cols)
+    downloadCSV(`${fileStem}.csv`, all.map(r => ({ ...r, rsid: rsFromNumber(r.rs_number), phenotype_id: phenotypeId })), qtlType === 's' ? ['phenotype_id', ...cols] : cols)
   }
 
+  if (failed) return <Empty label="Could not load the cis window." />
   return (
     <div className="space-y-2">
       <div className="flex flex-wrap items-center gap-2">
@@ -64,7 +75,7 @@ export default function CisTable({ query, fileStem }: { query: CisQuery; fileSte
           <option value="1e-5">p &lt; 1e-5</option>
           <option value="5e-8">p &lt; 5e-8</option>
         </select>
-        <button className="btn btn-sm h-8 gap-1.5 rounded-lg border-base-300 font-medium" onClick={exportCSV}><Download className="size-3.5" /> CSV</button>
+        <button className="btn btn-sm h-8 gap-1.5 rounded-lg border-base-300 font-medium" onClick={exportCSV} disabled={!table}><Download className="size-3.5" /> CSV</button>
       </div>
       {data === null ? <TableSkeleton columns={SKEL} rows={10} /> : total === 0 ? <Empty label="No variants match." /> : (
         <>
@@ -87,9 +98,10 @@ export default function CisTable({ query, fileStem }: { query: CisQuery; fileSte
               <tbody>
                 {data.map((r, i) => (
                   // inline style: credible-set rows take the set's plot color from the chart palette
-                  <tr key={i} className={r.cs_id != null ? 'hover:brightness-95' : 'hover:bg-base-200'} style={{ backgroundColor: csTint(r.cs_id, dark) }}>
+                  <tr key={i} className={`cursor-pointer transition-colors ${r.cs_id != null ? 'hover:brightness-95' : 'hover:bg-base-200/60'}`} style={{ backgroundColor: csTint(r.cs_id, dark) }}
+                    onClick={() => navigate(variantPath(r))}>
                     <td className="tabular-nums">{r.position.toLocaleString()}</td>
-                    <td><Link className="link-quiet" to={`/variant/${r.rs_number != null ? rsFromNumber(r.rs_number) : `${query.hit.chr}:${r.position}`}`}>{r.rs_number != null ? rsFromNumber(r.rs_number) : <span className="text-base-content/40">{query.hit.chr}:{r.position}</span>}</Link></td>
+                    <td>{r.rs_number != null ? rsFromNumber(r.rs_number) : <span className="text-base-content/40">{chr}:{r.position}</span>}</td>
                     <td className="font-mono text-xs text-base-content/60">{r.A1}/{r.A2}</td>
                     <td className="text-right tabular-nums text-base-content/60">{fmtBp(r.tss_distance)}</td>
                     <td className="text-right tabular-nums text-base-content/60">{fmtNum(r.af)}</td>

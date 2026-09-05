@@ -56,8 +56,9 @@ does.
 - eGene / sQTL intron: permutation p < 0.05, the preprint's wording (10,220 eGenes vs the
   paper's 10,241; 13,540 sQTL introns, exact).
 - Nominal cis tables are partitioned by chromosome and a 100-gene TSS bin, one row group per
-  gene, so a gene page fetches a ~90 KB footer and its own row group. `gene_detail` holds the
-  gene row, collapsed exons, and tested introns in one row per gene, partitioned the same way.
+  phenotype (gene for eQTL, intron for sQTL), so a gene page or a selected intron fetches a
+  ~90 KB footer and its own row group. `gene_detail` holds the gene row, collapsed exons, and
+  tested introns in one row per gene, partitioned the same way.
 - eQTL nominal rows are kept for every tested gene; sQTL nominal rows only for the 13,540
   significant introns (`sqtl_nominal` in `pipeline/config.yaml`), which keeps the bucket near
   7 GB for the R2 free tier instead of 16. Every intron keeps its permutation row.

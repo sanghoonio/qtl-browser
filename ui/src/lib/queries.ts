@@ -78,14 +78,19 @@ export const geneDetail = async (hit: SearchHit): Promise<GeneDetail | null> => 
   return { gene: gene as Gene, exons: JSON.parse(exons_json ?? '[]') as Exon[], splice }
 }
 
-export const transPairs = (hit: SearchHit) =>
-  rows<TransRow>(`SELECT * FROM ${parquet(`trans_pairs/chr=${hit.chr}/data.parquet`)}
-    WHERE gene_id = ${lit(hit.gene_id)} ORDER BY pval LIMIT 2000`)
+// ---- paged tables over materialized windows -------------------------------------------------
+// The gene page materializes two in-memory tables per gene (see db.ts `materialize`): the cis
+// window that the locus plot draws from, and the gene's trans rows. The cis and trans tables
+// page off those with limit/offset, a count, and an unpaged export, so every interaction is a
+// local query and nothing is re-read over HTTP.
 
-export interface CisQuery {
-  hit: SearchHit
-  qtlType: 'e' | 's'
-  phenotypeId?: string          // sQTL only
+/** `CREATE TABLE ... AS` body for one gene's trans rows (one or two row groups of the
+ *  per-chromosome file; 65k rows for the busiest gene). */
+export const transSQL = (hit: SearchHit) =>
+  `SELECT * FROM ${parquet(`trans_pairs/chr=${hit.chr}/data.parquet`)} WHERE gene_id = ${lit(hit.gene_id)}`
+
+interface PagedQuery {
+  table: string                 // materialized table to page off
   maxP?: number                 // filter
   search?: string               // rsID or position, prefix match
   orderBy?: string
@@ -94,35 +99,78 @@ export interface CisQuery {
   offset?: number
 }
 
-function cisWhere(q: CisQuery): string {
-  const parts = [`gene_id = ${lit(q.hit.gene_id)}`]
-  if (q.qtlType === 's' && q.phenotypeId) parts.push(`phenotype_id = ${lit(q.phenotypeId)}`)
-  if (q.maxP != null) parts.push(`pval_nominal <= ${q.maxP}`)
-  const s = q.search?.trim()
-  if (s) {
-    const rs = /^rs(\d+)$/i.exec(s)
-    const pos = /^(?:chr[0-9xy]+:)?([\d,]+)$/i.exec(s)
-    if (rs) parts.push(`CAST(rs_number AS VARCHAR) LIKE ${lit(rs[1] + '%')}`)
-    else if (pos) parts.push(`CAST(position AS VARCHAR) LIKE ${lit(pos[1].replace(/,/g, '') + '%')}`)
-    else parts.push('false')
-  }
-  return `FROM ${parquet(nominalFile(q.hit, q.qtlType))} WHERE ${parts.join(' AND ')}`
+export interface CisQuery extends PagedQuery {
+  chr: string
+  qtlType: 'e' | 's'
+  phenotypeId?: string          // sQTL only, for the CSV
 }
 
+/** rsID / position prefix search on a window; rsIDs are integer rs_number in the cis window
+ *  and text rsid in the trans table. */
+function searchWhere(s: string | undefined, rsExpr: string): string | null {
+  const t = s?.trim()
+  if (!t) return null
+  const rs = /^rs(\d+)$/i.exec(t)
+  const pos = /^(?:chr[0-9xy]+:)?([\d,]+)$/i.exec(t)
+  if (rs) return `${rsExpr} LIKE ${lit(rs[1] + '%')}`
+  if (pos) return `CAST(position AS VARCHAR) LIKE ${lit(pos[1].replace(/,/g, '') + '%')}`
+  return 'false'
+}
+
+function cisWhere(q: CisQuery): string {
+  const parts = ['true']
+  if (q.maxP != null) parts.push(`pval_nominal <= ${q.maxP}`)
+  const s = searchWhere(q.search, 'CAST(rs_number AS VARCHAR)')
+  if (s) parts.push(s)
+  return `FROM ${q.table} WHERE ${parts.join(' AND ')}`
+}
+
+const CIS_COLS = 'position, A1, A2, rs_number, tss_distance, af, ma_samples, ma_count, pval_nominal, slope, slope_se, pip, cs_id'
 const CIS_SORTABLE = new Set(['position', 'pval_nominal', 'slope', 'af', 'pip', 'tss_distance', 'ma_count'])
 
 export const cisRows = (q: CisQuery) => {
   const col = q.orderBy && CIS_SORTABLE.has(q.orderBy) ? q.orderBy : 'pval_nominal'
-  return rows<CisRow>(`SELECT * ${cisWhere(q)} ORDER BY ${col} ${q.desc ? 'DESC' : 'ASC'} NULLS LAST
+  return rows<CisRow>(`SELECT ${CIS_COLS} ${cisWhere(q)} ORDER BY ${col} ${q.desc ? 'DESC' : 'ASC'} NULLS LAST
                        LIMIT ${q.limit ?? 50} OFFSET ${q.offset ?? 0}`)
 }
 
 export const cisCount = async (q: CisQuery) =>
   Number((await one<{ n: number }>(`SELECT count(*) AS n ${cisWhere(q)}`))?.n ?? 0)
 
-/** Full cis window for plotting/CSV (thousands of rows, one row group). */
+/** Full cis window for CSV. */
 export const cisAll = (q: CisQuery) =>
-  rows<CisRow>(`SELECT * ${cisWhere({ ...q, maxP: undefined, search: undefined })} ORDER BY position`)
+  rows<CisRow>(`SELECT ${CIS_COLS} ${cisWhere({ ...q, maxP: undefined, search: undefined })} ORDER BY position`)
+
+export interface TransQuery extends PagedQuery { qtlType: 'e' | 's' }
+
+function transWhere(q: TransQuery): string {
+  const parts = [`qtl_type = ${lit(q.qtlType)}`]
+  if (q.maxP != null) parts.push(`pval <= ${q.maxP}`)
+  const s = searchWhere(q.search, 'substr(rsid, 3)')
+  if (s) parts.push(s)
+  return `FROM ${q.table} WHERE ${parts.join(' AND ')}`
+}
+
+const TRANS_SORTABLE: Record<string, string[]> = {
+  // chromosome order then position, so chr2 sorts before chr10
+  position: [`CASE WHEN variant_chr = 'chrX' THEN 23 WHEN variant_chr = 'chrY' THEN 24 ELSE TRY_CAST(substr(variant_chr, 4) AS INTEGER) END`, 'position'],
+  af: ['af'], pval: ['pval'], beta: ['beta'], r2: ['r2'],
+}
+
+function transOrder(q: TransQuery): string {
+  const cols = (q.orderBy ? TRANS_SORTABLE[q.orderBy] : undefined) ?? ['pval']
+  return cols.map(c => `${c} ${q.desc ? 'DESC' : 'ASC'} NULLS LAST`).join(', ')
+}
+
+export const transRows = (q: TransQuery) =>
+  rows<TransRow>(`SELECT * ${transWhere(q)} ORDER BY ${transOrder(q)} LIMIT ${q.limit ?? 50} OFFSET ${q.offset ?? 0}`)
+
+export const transCount = async (q: TransQuery) =>
+  Number((await one<{ n: number }>(`SELECT count(*) AS n ${transWhere(q)}`))?.n ?? 0)
+
+/** Filtered trans rows for CSV, in the table's current order. */
+export const transAll = (q: TransQuery) =>
+  rows<TransRow>(`SELECT * ${transWhere(q)} ORDER BY ${transOrder(q)}`)
 
 export const genesInRegion = (chr: string, start: number, end: number) =>
   rows<SearchHit>(`SELECT * FROM search_index WHERE chr = ${lit(chr)} AND tss BETWEEN ${start} AND ${end} ORDER BY tss`)

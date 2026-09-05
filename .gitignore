@@ -14,3 +14,9 @@ __pycache__/
 # ui app
 ui/node_modules/
 ui/dist/
+
+# R / RStudio session files
+.Rhistory
+.RData
+.Rproj.user/
+*.Rproj
